@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, TextInput, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useAuth, useAlert } from '@/template';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../constants/theme';
@@ -21,7 +22,8 @@ const getEmailRedirectUrl = () => {
 };
 
 export default function LoginScreen() {
-  const { sendOTP, verifyOTPAndLogin, signInWithPassword, operationLoading } = useAuth();
+  const router = useRouter();
+  const { user, initialized, sendOTP, verifyOTPAndLogin, signInWithPassword, operationLoading } = useAuth();
   const { showAlert } = useAlert();
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
@@ -30,13 +32,25 @@ export default function LoginScreen() {
   const [otp, setOtp] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  useEffect(() => {
+    if (initialized && user) {
+      router.replace('/(tabs)');
+    }
+  }, [initialized, router, user]);
+
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
       showAlert('Error', 'Please fill in all fields');
       return;
     }
-    const { error } = await signInWithPassword(email.trim(), password);
-    if (error) showAlert('Login Failed', error);
+    const { error, user: authUser } = await signInWithPassword(email.trim(), password);
+    if (error) {
+      showAlert('Login Failed', error);
+      return;
+    }
+    if (authUser) {
+      router.replace('/(tabs)');
+    }
   };
 
   const handleSendOTP = async () => {
@@ -68,8 +82,14 @@ export default function LoginScreen() {
       showAlert('Error', 'Please enter the verification code');
       return;
     }
-    const { error } = await verifyOTPAndLogin(email.trim(), otp.trim(), { password });
-    if (error) showAlert('Verification Failed', error);
+    const { error, user: authUser } = await verifyOTPAndLogin(email.trim(), otp.trim(), { password });
+    if (error) {
+      showAlert('Verification Failed', error);
+      return;
+    }
+    if (authUser) {
+      router.replace('/(tabs)');
+    }
   };
 
   return (
