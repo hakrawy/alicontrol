@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, ReactNode } from 'react';
 import {
-  View, Text, ScrollView, Pressable, Dimensions, StyleSheet,
+  View, Text, ScrollView, Pressable, Dimensions, StyleSheet, TextInput,
   NativeSyntheticEvent, NativeScrollEvent, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -30,6 +30,7 @@ export default function HomeScreen() {
   } = useAppContext();
   const [activeHero, setActiveHero] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [homeSearch, setHomeSearch] = useState('');
   const [continueWatching, setContinueWatching] = useState<(ContentItem & { progress: number; watch_duration: number })[]>([]);
   const heroRef = useRef<ScrollView>(null);
 
@@ -95,6 +96,21 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.primary} colors={[theme.primary]} progressBackgroundColor={theme.surface} />}
       >
+        <View style={styles.homeSearchWrap}>
+          <Pressable style={styles.homeSearchBar} onPress={() => router.push({ pathname: '/(tabs)/search', params: homeSearch ? { q: homeSearch } : {} })}>
+            <MaterialIcons name="search" size={20} color={theme.textMuted} />
+            <TextInput
+              style={styles.homeSearchInput}
+              placeholder="Search movies, series, and channels..."
+              placeholderTextColor={theme.textMuted}
+              value={homeSearch}
+              onChangeText={setHomeSearch}
+              onFocus={() => router.push({ pathname: '/(tabs)/search', params: homeSearch ? { q: homeSearch } : {} })}
+            />
+            <MaterialIcons name="north-east" size={18} color={theme.textMuted} />
+          </Pressable>
+        </View>
+
         {/* Hero Banner */}
         {banners.length > 0 ? (
           <View style={{ height: HERO_HEIGHT }}>
@@ -361,6 +377,9 @@ const styles = StyleSheet.create({
   headerIcons: { flexDirection: 'row', gap: 16 },
   headerIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
   heroContent: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 20, paddingBottom: 20 },
+  homeSearchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
+  homeSearchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, paddingHorizontal: 14, height: 50 },
+  homeSearchInput: { flex: 1, fontSize: 14, color: '#FFF' },
   heroBadge: { alignSelf: 'flex-start', backgroundColor: theme.primary, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, marginBottom: 10 },
   heroBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF', letterSpacing: 1 },
   heroTitle: { fontSize: 32, fontWeight: '800', color: '#FFF', letterSpacing: -0.5, marginBottom: 4 },

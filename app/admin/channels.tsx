@@ -27,6 +27,7 @@ export default function AdminChannels() {
   const [importing, setImporting] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const load = async () => { setLoading(true); try { setChannels(await api.fetchChannels()); } catch {} setLoading(false); };
   useEffect(() => { load(); }, []);
@@ -96,6 +97,37 @@ export default function AdminChannels() {
     ]);
   };
 
+  const filteredChannels = searchQuery.trim()
+    ? channels.filter((channel) => {
+        const haystack = `${channel.name} ${channel.category} ${channel.current_program}`.toLowerCase();
+        return haystack.includes(searchQuery.toLowerCase());
+      })
+    : channels;
+
+  const handleDeleteAllVisible = () => {
+    if (filteredChannels.length === 0) {
+      showAlert('Nothing to delete', 'There are no channels in the current results.');
+      return;
+    }
+
+    showAlert('Delete visible channels', `Delete all ${filteredChannels.length} visible channels?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await Promise.all(filteredChannels.map((channel) => api.deleteChannel(channel.id)));
+            clearSelection();
+            await load();
+          } catch (err: any) {
+            showAlert('Delete failed', err.message || 'Some channels could not be deleted.');
+          }
+        },
+      },
+    ]);
+  };
+
   const handleImportPlaylist = async () => {
     if (!playlistUrl.trim()) {
       showAlert('Missing URL', 'Paste a valid M3U or M3U8 playlist URL first.');
@@ -145,13 +177,17 @@ export default function AdminChannels() {
           <MaterialIcons name={selectionMode ? 'close' : 'checklist'} size={18} color="#FFF" />
           <Text style={styles.bulkBtnText}>{selectionMode ? 'Cancel Selection' : 'Select Multiple'}</Text>
         </Pressable>
+        <Pressable style={styles.bulkDangerBtn} onPress={handleDeleteAllVisible}>
+          <MaterialIcons name="delete-forever" size={18} color="#FFF" />
+          <Text style={styles.bulkBtnText}>Delete Visible ({filteredChannels.length})</Text>
+        </Pressable>
         {selectionMode ? (
           <>
             <Pressable
               style={styles.bulkBtnSecondary}
-              onPress={() => setSelectedIds(selectedIds.length === channels.length ? [] : channels.map((channel) => channel.id))}
+              onPress={() => setSelectedIds(selectedIds.length === filteredChannels.length ? [] : filteredChannels.map((channel) => channel.id))}
             >
-              <Text style={styles.bulkBtnSecondaryText}>{selectedIds.length === channels.length ? 'Clear All' : 'Select All'}</Text>
+              <Text style={styles.bulkBtnSecondaryText}>{selectedIds.length === filteredChannels.length ? 'Clear All' : 'Select All'}</Text>
             </Pressable>
             <Pressable style={styles.bulkDangerBtn} onPress={handleDeleteSelected}>
               <MaterialIcons name="delete-sweep" size={18} color="#FFF" />
@@ -159,6 +195,18 @@ export default function AdminChannels() {
             </Pressable>
           </>
         ) : null}
+      </View>
+
+      <View style={styles.searchBar}>
+        <MaterialIcons name="search" size={18} color={theme.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search channels..."
+          placeholderTextColor={theme.textMuted}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+        {searchQuery ? <Pressable onPress={() => setSearchQuery('')}><MaterialIcons name="close" size={16} color={theme.textMuted} /></Pressable> : null}
       </View>
 
       <View style={styles.importCard}>
@@ -224,8 +272,8 @@ export default function AdminChannels() {
         </Animated.View>
       ) : null}
 
-      <Text style={styles.countText}>{channels.length} channels</Text>
-      {channels.map((ch, i) => (
+      <Text style={styles.countText}>{filteredChannels.length} channels</Text>
+      {filteredChannels.map((ch, i) => (
         <Animated.View key={ch.id} entering={FadeInDown.delay(Math.min(i, 8) * 40).duration(300)}>
           <View style={styles.itemCard}>
             {selectionMode ? (
@@ -286,6 +334,8 @@ const styles = StyleSheet.create({
   cancelText: { fontSize: 14, fontWeight: '600', color: theme.textSecondary },
   saveBtn: { flex: 1, height: 48, borderRadius: 12, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center' },
   saveText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.surface, borderRadius: 10, paddingHorizontal: 12, height: 42, borderWidth: 1, borderColor: theme.border, marginBottom: 12 },
+  searchInput: { flex: 1, fontSize: 14, color: '#FFF' },
   countText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary, marginBottom: 12 },
   itemCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.border, gap: 12 },
   checkboxWrap: { width: 28, alignItems: 'center', justifyContent: 'center' },

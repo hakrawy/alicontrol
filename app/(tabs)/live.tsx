@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, TextInput } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -18,6 +18,7 @@ export default function LiveScreen() {
   const router = useRouter();
   const { channels } = useAppContext();
   const [activeCategory, setActiveCategory] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const openChannel = (channel: typeof channels[number]) => {
     Haptics.selectionAsync();
     router.push({
@@ -34,9 +35,13 @@ export default function LiveScreen() {
 
   const filtered = useMemo(() => {
     const live = channels.filter(c => c.is_live);
-    if (activeCategory === 'all') return live;
-    return live.filter(c => c.category === activeCategory);
-  }, [channels, activeCategory]);
+    const byCategory = activeCategory === 'all' ? live : live.filter(c => c.category === activeCategory);
+    if (!searchQuery.trim()) return byCategory;
+    return byCategory.filter((channel) => {
+      const haystack = `${channel.name} ${channel.category} ${channel.current_program}`.toLowerCase();
+      return haystack.includes(searchQuery.toLowerCase());
+    });
+  }, [channels, activeCategory, searchQuery]);
 
   const featuredChannels = channels.filter(c => c.is_featured && c.is_live);
 
@@ -47,6 +52,20 @@ export default function LiveScreen() {
         <View style={styles.liveIndicator}>
           <View style={styles.liveRedDot} />
           <Text style={styles.liveCount}>{channels.filter(c => c.is_live).length} Live</Text>
+        </View>
+      </View>
+
+      <View style={styles.searchWrap}>
+        <View style={styles.searchBar}>
+          <MaterialIcons name="search" size={20} color={theme.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search live channels..."
+            placeholderTextColor={theme.textMuted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery ? <Pressable onPress={() => setSearchQuery('')}><MaterialIcons name="close" size={18} color={theme.textMuted} /></Pressable> : null}
         </View>
       </View>
 
@@ -124,6 +143,9 @@ const styles = StyleSheet.create({
   liveIndicator: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveRedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.live },
   liveCount: { fontSize: 14, fontWeight: '600', color: theme.live },
+  searchWrap: { paddingHorizontal: 16, paddingBottom: 8 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: theme.surface, borderRadius: 14, borderWidth: 1, borderColor: theme.border, paddingHorizontal: 14, height: 48 },
+  searchInput: { flex: 1, fontSize: 14, color: '#FFF' },
   sectionTitle: { fontSize: 18, fontWeight: '700', color: '#FFF', letterSpacing: -0.3, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
   featuredCard: { width: SCREEN_WIDTH * 0.75, height: 180, borderRadius: 14, overflow: 'hidden', backgroundColor: theme.surface },
   featuredImage: { width: '100%', height: '100%' },

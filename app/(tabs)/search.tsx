@@ -3,7 +3,7 @@ import { View, Text, ScrollView, Pressable, TextInput, StyleSheet, Dimensions } 
 import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -23,8 +23,9 @@ const genreList = ['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Horror', 'Romance', '
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams<{ q?: string }>();
   const { allMovies, allSeries } = useAppContext();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(typeof params.q === 'string' ? params.q : '');
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<ContentItem[]>([]);
@@ -44,6 +45,12 @@ export default function SearchScreen() {
     }, 300);
     return () => clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => {
+    if (typeof params.q === 'string') {
+      setQuery(params.q);
+    }
+  }, [params.q]);
 
   const results = useMemo(() => {
     let items = query.length >= 2 ? searchResults : allContent;
