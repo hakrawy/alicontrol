@@ -75,37 +75,41 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <Image
+        pointerEvents="none"
         source={require('../assets/images/watchroom-hero.jpg')}
         style={StyleSheet.absoluteFill}
         contentFit="cover"
       />
       <LinearGradient
+        pointerEvents="none"
         colors={['rgba(2,6,23,0.18)', 'rgba(6,24,38,0.7)', 'rgba(2,8,24,0.96)', theme.background]}
         style={StyleSheet.absoluteFill}
         locations={[0, 0.3, 0.7, 1]}
       />
       <LinearGradient
+        pointerEvents="none"
         colors={['rgba(16,185,129,0.24)', 'transparent']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.topGlow}
       />
       <LinearGradient
+        pointerEvents="none"
         colors={['rgba(56,189,248,0.28)', 'transparent']}
         start={{ x: 1, y: 0 }}
         end={{ x: 0, y: 1 }}
         style={styles.sideGlow}
       />
-      <View style={styles.portalHalo} />
-      <View style={styles.portalRing} />
-      <View style={styles.lightOrbA} />
-      <View style={styles.lightOrbB} />
-      <View style={styles.lightOrbC} />
+      <View pointerEvents="none" style={styles.portalHalo} />
+      <View pointerEvents="none" style={styles.portalRing} />
+      <View pointerEvents="none" style={styles.lightOrbA} />
+      <View pointerEvents="none" style={styles.lightOrbB} />
+      <View pointerEvents="none" style={styles.lightOrbC} />
       <SafeAreaView style={{ flex: 1 }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {/* Logo */}
-            <Animated.View entering={FadeInDown.duration(500)} style={styles.logoSection}>
+            <Animated.View entering={FadeInDown.duration(500)} style={styles.logoSection} pointerEvents="none">
               <View style={styles.heroPill}>
                 <MaterialIcons name="auto-awesome" size={16} color="#D9F99D" />
                 <Text style={styles.heroPillText}>Cinematic Fantasy Experience</Text>
