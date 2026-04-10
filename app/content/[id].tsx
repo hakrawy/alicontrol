@@ -47,7 +47,13 @@ export default function ContentDetailScreen() {
         }
         // Related content
         const all = await api.fetchAllContent();
-        const related = all.filter(c => c.id !== id && c.genre.some(g => item?.genre.includes(g))).slice(0, 6);
+        const sourceGenres = Array.isArray(item?.genre) ? item.genre.filter(Boolean) : [];
+        const related = all
+          .filter((candidate) => {
+            const candidateGenres = Array.isArray(candidate.genre) ? candidate.genre.filter(Boolean) : [];
+            return candidate.id !== id && candidateGenres.some((genre) => sourceGenres.includes(genre));
+          })
+          .slice(0, 6);
         setRelatedContent(related);
       } catch (err) { console.error(err); }
       setLoading(false);
@@ -71,6 +77,11 @@ export default function ContentDetailScreen() {
   const isMovie = content.type === 'movie';
   const movieData = content as Movie;
   const seriesData = content as Series;
+  const safeGenres = Array.isArray(content.genre) ? content.genre.filter(Boolean) : [];
+  const safeCastMembers = Array.isArray(content.cast_members) ? content.cast_members.filter(Boolean) : [];
+  const safeBackdrop = content.backdrop || content.poster || 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=1400&q=80';
+  const safePoster = content.poster || safeBackdrop;
+  const safeDescription = content.description || 'No description available yet.';
   const isFav = isFavorite(content.id);
   const viewerLabel = content.live_viewers && content.live_viewers > 0
     ? `${api.formatViewers(content.live_viewers)} watching`
@@ -252,7 +263,7 @@ export default function ContentDetailScreen() {
           contentId: content.id,
           contentType: 'movie',
           contentTitle: content.title,
-          contentPoster: content.poster,
+          contentPoster: safePoster,
         },
       });
       return;
@@ -270,7 +281,7 @@ export default function ContentDetailScreen() {
         contentId: firstEpisode.id,
         contentType: 'episode',
         contentTitle: `${content.title} - ${firstEpisode.title}`,
-        contentPoster: content.poster,
+        contentPoster: safePoster,
       },
     });
   };
@@ -290,7 +301,7 @@ export default function ContentDetailScreen() {
     <View style={styles.container}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 100 }} showsVerticalScrollIndicator={false}>
         <View style={{ height: BACKDROP_HEIGHT }}>
-          <Image source={{ uri: content.backdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
+          <Image source={{ uri: safeBackdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
           <LinearGradient colors={['rgba(10,10,15,0.2)', 'rgba(10,10,15,0.6)', theme.background]} style={StyleSheet.absoluteFill} locations={[0, 0.5, 1]} />
         </View>
 
@@ -308,9 +319,11 @@ export default function ContentDetailScreen() {
             <Text style={styles.metaText}>{content.year}</Text>
             {isMovie ? <Text style={styles.metaText}>{movieData.duration}</Text> : <Text style={styles.metaText}>{seriesData.total_episodes} Episodes</Text>}
             <Text style={styles.metaText}>{viewerLabel}</Text>
-            <View style={styles.genrePills}>
-              {content.genre.map(g => <View key={g} style={styles.genrePill}><Text style={styles.genrePillText}>{g}</Text></View>)}
-            </View>
+            {safeGenres.length > 0 ? (
+              <View style={styles.genrePills}>
+                {safeGenres.map((genre) => <View key={genre} style={styles.genrePill}><Text style={styles.genrePillText}>{genre}</Text></View>)}
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.actionRow}>
@@ -332,12 +345,14 @@ export default function ContentDetailScreen() {
             </Pressable>
           </View>
 
-          <Text style={styles.description}>{content.description}</Text>
+          <Text style={styles.description}>{safeDescription}</Text>
 
-          <Animated.View entering={FadeInDown.delay(100).duration(400)} style={styles.castSection}>
-            <Text style={styles.sectionLabel}>CAST</Text>
-            <Text style={styles.castList}>{content.cast_members.join('  ·  ')}</Text>
-          </Animated.View>
+          {safeCastMembers.length > 0 ? (
+            <Animated.View entering={FadeInDown.delay(100).duration(400)} style={styles.castSection}>
+              <Text style={styles.sectionLabel}>CAST</Text>
+              <Text style={styles.castList}>{safeCastMembers.join('  •  ')}</Text>
+            </Animated.View>
+          ) : null}
 
           {isMovie && movieData.quality && movieData.quality.length > 0 && (
             <Animated.View entering={FadeInDown.delay(150).duration(400)} style={styles.qualitySection}>
@@ -383,7 +398,7 @@ export default function ContentDetailScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
                 {relatedContent.map(item => (
                   <Pressable key={item.id} onPress={() => { Haptics.selectionAsync(); router.push(`/content/${item.id}`); }} style={{ width: 120 }}>
-                    <Image source={{ uri: item.poster }} style={styles.relatedPoster} contentFit="cover" transition={200} />
+                    <Image source={{ uri: item.poster || item.backdrop || safePoster }} style={styles.relatedPoster} contentFit="cover" transition={200} />
                     <Text style={styles.relatedTitle} numberOfLines={1}>{item.title}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
                       <MaterialIcons name="star" size={11} color={theme.accent} /><Text style={styles.relatedRating}>{item.rating}</Text>
