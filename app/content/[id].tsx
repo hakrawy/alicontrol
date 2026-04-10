@@ -16,16 +16,70 @@ import type { ContentItem, Movie, Series, Season, StreamSource } from '../../ser
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BACKDROP_HEIGHT = 380;
 
+function parsePreviewContent(rawValue?: string): ContentItem | null {
+  if (!rawValue) return null;
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.id !== 'string' || typeof parsed.title !== 'string') {
+      return null;
+    }
+    return {
+      ...parsed,
+      type: parsed.type === 'series' ? 'series' : 'movie',
+      genre: Array.isArray(parsed.genre) ? parsed.genre : [],
+      cast_members: Array.isArray(parsed.cast_members) ? parsed.cast_members : [],
+      quality: Array.isArray(parsed.quality) ? parsed.quality : ['Auto'],
+      stream_sources: Array.isArray(parsed.stream_sources) ? parsed.stream_sources : [],
+      live_viewers: Number(parsed.live_viewers || 0),
+      view_count: Number(parsed.view_count || 0),
+      rating: Number(parsed.rating || 0),
+      year: Number(parsed.year || 0),
+    } as ContentItem;
+  } catch {
+    return null;
+  }
+}
+
+function buildContentRoute(item: ContentItem) {
+  return {
+    pathname: '/content/[id]' as const,
+    params: {
+      id: item.id,
+      preview: JSON.stringify({
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        description: item.description,
+        poster: item.poster,
+        backdrop: item.backdrop,
+        genre: item.genre,
+        rating: item.rating,
+        year: item.year,
+        cast_members: item.cast_members,
+        quality: item.type === 'movie' ? (item as any).quality : ['Auto'],
+        stream_url: item.type === 'movie' ? (item as any).stream_url : '',
+        stream_sources: item.type === 'movie' ? (item as any).stream_sources || [] : [],
+        subtitle_url: item.type === 'movie' ? (item as any).subtitle_url : '',
+        is_new: item.is_new,
+        is_exclusive: item.is_exclusive,
+        live_viewers: item.live_viewers,
+        view_count: item.view_count,
+      }),
+    },
+  };
+}
+
 export default function ContentDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, preview } = useLocalSearchParams<{ id: string; preview?: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
   const { addToFavorites, removeFromFavorites, isFavorite } = useAppContext();
-  const [content, setContent] = useState<ContentItem | null>(null);
+  const previewContent = parsePreviewContent(typeof preview === 'string' ? preview : undefined);
+  const [content, setContent] = useState<ContentItem | null>(previewContent);
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [selectedSeason, setSelectedSeason] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!previewContent);
   const [relatedContent, setRelatedContent] = useState<ContentItem[]>([]);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [playbackSources, setPlaybackSources] = useState<StreamSource[]>([]);
@@ -37,10 +91,16 @@ export default function ContentDetailScreen() {
   useEffect(() => {
     if (!id) return;
     const load = async () => {
-      setLoading(true);
+      if (!previewContent) {
+        setLoading(true);
+      }
       try {
         const item = await api.fetchContentById(id);
-        setContent(item);
+        if (item) {
+          setContent(item);
+        } else if (!previewContent) {
+          setContent(null);
+        }
         if (item?.type === 'series') {
           const s = await api.fetchSeasonsWithEpisodes(id);
           setSeasons(s);
@@ -48,8 +108,8 @@ export default function ContentDetailScreen() {
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
     };
-    load();
-  }, [id]);
+    void load();
+  }, [id, previewContent]);
 
   useEffect(() => {
     if (!content) return;
@@ -432,7 +492,7 @@ export default function ContentDetailScreen() {
               <Text style={[styles.sectionLabel, { marginTop: 28 }]}>YOU MAY ALSO LIKE</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
                 {relatedContent.map(item => (
-                  <Pressable key={item.id} onPress={() => { Haptics.selectionAsync(); router.push(`/content/${item.id}`); }} style={{ width: 120 }}>
+                  <Pressable key={item.id} onPress={() => { Haptics.selectionAsync(); router.push(buildContentRoute(item)); }} style={{ width: 120 }}>
                     <Image source={{ uri: item.poster || item.backdrop || safePoster }} style={styles.relatedPoster} contentFit="cover" transition={200} />
                     <Text style={styles.relatedTitle} numberOfLines={1}>{item.title}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>

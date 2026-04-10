@@ -111,9 +111,36 @@ export default function HomeScreen() {
     setActiveHero(index);
   };
 
-  const navigateToContent = (id: string) => {
+  const buildContentRoute = (item: ContentItem) => ({
+    pathname: '/content/[id]' as const,
+    params: {
+      id: item.id,
+      preview: JSON.stringify({
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        description: item.description,
+        poster: item.poster,
+        backdrop: item.backdrop,
+        genre: item.genre,
+        rating: item.rating,
+        year: item.year,
+        cast_members: item.cast_members,
+        quality: item.type === 'movie' ? (item as any).quality : ['Auto'],
+        stream_url: item.type === 'movie' ? (item as any).stream_url : '',
+        stream_sources: item.type === 'movie' ? (item as any).stream_sources || [] : [],
+        subtitle_url: item.type === 'movie' ? (item as any).subtitle_url : '',
+        is_new: item.is_new,
+        is_exclusive: item.is_exclusive,
+        live_viewers: item.live_viewers,
+        view_count: item.view_count,
+      }),
+    },
+  });
+
+  const navigateToContent = (item: ContentItem) => {
     Haptics.selectionAsync();
-    router.push(`/content/${id}`);
+    router.push(buildContentRoute(item));
   };
 
   const openChannel = (channel: typeof channels[number]) => {
@@ -170,7 +197,11 @@ export default function HomeScreen() {
           <View style={{ height: HERO_HEIGHT }}>
             <ScrollView ref={heroRef} horizontal pagingEnabled showsHorizontalScrollIndicator={false} onMomentumScrollEnd={handleHeroScroll}>
               {banners.map((banner) => (
-                <Pressable key={banner.id} onPress={() => { if (banner.content_id) navigateToContent(banner.content_id); }} style={{ width: SCREEN_WIDTH, height: HERO_HEIGHT }}>
+                <Pressable key={banner.id} onPress={() => {
+                  const target = [...allMovies, ...allSeries].find((item) => item.id === banner.content_id);
+                  if (target) navigateToContent(target);
+                  else if (banner.content_id) router.push(`/content/${banner.content_id}`);
+                }} style={{ width: SCREEN_WIDTH, height: HERO_HEIGHT }}>
                   <Image source={{ uri: banner.backdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
                   <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)', 'rgba(10,10,15,0.85)', theme.background]} style={StyleSheet.absoluteFill} locations={[0, 0.4, 0.7, 1]} />
                   <View style={[styles.heroContent, { paddingTop: insets.top + 40 }]}>
@@ -185,7 +216,11 @@ export default function HomeScreen() {
                       {(banner.genre || []).map(g => <Text key={g} style={styles.heroGenre}>{g}</Text>)}
                     </View>
                     <View style={styles.heroActions}>
-                      <Pressable style={styles.playButton} onPress={() => { if (banner.content_id) navigateToContent(banner.content_id); }}>
+                      <Pressable style={styles.playButton} onPress={() => {
+                        const target = [...allMovies, ...allSeries].find((item) => item.id === banner.content_id);
+                        if (target) navigateToContent(target);
+                        else if (banner.content_id) router.push(`/content/${banner.content_id}`);
+                      }}>
                         <MaterialIcons name="play-arrow" size={24} color="#000" />
                         <Text style={styles.playButtonText}>{copy.play}</Text>
                       </Pressable>
@@ -214,7 +249,7 @@ export default function HomeScreen() {
               {continueWatching.map((item) => {
                 const pct = item.watch_duration > 0 ? Math.round((item.progress / item.watch_duration) * 100) : 0;
                 return (
-                  <Pressable key={item.id} onPress={() => navigateToContent(item.id)} style={styles.continueCard}>
+                    <Pressable key={item.id} onPress={() => navigateToContent(item)} style={styles.continueCard}>
                     <View style={styles.continuePosterWrap}>
                       <Image source={{ uri: item.poster }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={200} />
                       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.continueGradient} />
@@ -257,7 +292,7 @@ export default function HomeScreen() {
             <SectionHeader title={copy.featuredMovies} isRTL={isRTL} />
             <HorizontalShelf isRTL={isRTL}>
               {featuredMovies.map(movie => (
-                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie.id)} />
+                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie)} />
               ))}
             </HorizontalShelf>
           </Animated.View>
@@ -269,7 +304,7 @@ export default function HomeScreen() {
             <SectionHeader title={copy.newReleases} icon="fiber-new" isRTL={isRTL} />
             <HorizontalShelf isRTL={isRTL}>
               {newContent.map(item => (
-                <ContentCard key={item.id} item={item} onPress={() => navigateToContent(item.id)} showBadge />
+                <ContentCard key={item.id} item={item} onPress={() => navigateToContent(item)} showBadge />
               ))}
             </HorizontalShelf>
           </Animated.View>
@@ -281,7 +316,7 @@ export default function HomeScreen() {
             <SectionHeader title={copy.topSeries} isRTL={isRTL} />
             <HorizontalShelf isRTL={isRTL}>
               {allSeries.map(s => (
-                <ContentCard key={s.id} item={s} onPress={() => navigateToContent(s.id)} />
+                <ContentCard key={s.id} item={s} onPress={() => navigateToContent(s)} />
               ))}
             </HorizontalShelf>
           </Animated.View>
@@ -336,7 +371,7 @@ export default function HomeScreen() {
             <SectionHeader title={copy.allMovies} isRTL={isRTL} />
             <HorizontalShelf isRTL={isRTL}>
               {allMovies.map(movie => (
-                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie.id)} />
+                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie)} />
               ))}
             </HorizontalShelf>
           </Animated.View>

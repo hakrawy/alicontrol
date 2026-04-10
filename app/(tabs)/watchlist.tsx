@@ -21,6 +21,33 @@ export default function WatchlistScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const buildContentRoute = (item: ContentItem) => ({
+    pathname: '/content/[id]' as const,
+    params: {
+      id: item.id,
+      preview: JSON.stringify({
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        description: item.description,
+        poster: item.poster,
+        backdrop: item.backdrop,
+        genre: item.genre,
+        rating: item.rating,
+        year: item.year,
+        cast_members: item.cast_members,
+        quality: item.type === 'movie' ? (item as any).quality : ['Auto'],
+        stream_url: item.type === 'movie' ? (item as any).stream_url : '',
+        stream_sources: item.type === 'movie' ? (item as any).stream_sources || [] : [],
+        subtitle_url: item.type === 'movie' ? (item as any).subtitle_url : '',
+        is_new: item.is_new,
+        is_exclusive: item.is_exclusive,
+        live_viewers: item.live_viewers,
+        view_count: item.view_count,
+      }),
+    },
+  });
+
   const loadItems = useCallback(async () => {
     setLoading(true);
     const loaded: ContentItem[] = [];
@@ -61,7 +88,7 @@ export default function WatchlistScreen() {
         >
           {items.map((item, index) => (
             <Animated.View key={item.id} entering={FadeInDown.delay(index * 60).duration(350)}>
-              <Pressable style={styles.listCard} onPress={() => { Haptics.selectionAsync(); router.push(`/content/${item.id}`); }}>
+              <Pressable style={styles.listCard} onPress={() => { Haptics.selectionAsync(); router.push(buildContentRoute(item)); }}>
                 <Image source={{ uri: item.poster }} style={styles.listPoster} contentFit="cover" transition={200} />
                 <View style={styles.listInfo}>
                   <View style={styles.listTypeBadge}><Text style={styles.listTypeText}>{item.type === 'movie' ? 'MOVIE' : 'SERIES'}</Text></View>

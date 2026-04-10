@@ -90,6 +90,33 @@ export default function SearchScreen() {
         noResultsSubtitle: 'Try a different search term or genre',
       };
 
+  const buildContentRoute = (item: ContentItem) => ({
+    pathname: '/content/[id]' as const,
+    params: {
+      id: item.id,
+      preview: JSON.stringify({
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        description: item.description,
+        poster: item.poster,
+        backdrop: item.backdrop,
+        genre: item.genre,
+        rating: item.rating,
+        year: item.year,
+        cast_members: item.cast_members,
+        quality: item.type === 'movie' ? (item as any).quality : ['Auto'],
+        stream_url: item.type === 'movie' ? (item as any).stream_url : '',
+        stream_sources: item.type === 'movie' ? (item as any).stream_sources || [] : [],
+        subtitle_url: item.type === 'movie' ? (item as any).subtitle_url : '',
+        is_new: item.is_new,
+        is_exclusive: item.is_exclusive,
+        live_viewers: item.live_viewers,
+        view_count: item.view_count,
+      }),
+    },
+  });
+
   return (
     <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.background, direction }]}>
       <View style={styles.searchBarWrap}>
@@ -126,7 +153,7 @@ export default function SearchScreen() {
             contentContainerStyle={{ paddingBottom: insets.bottom + 24, paddingTop: 6 }}
             renderItem={({ item, index }) => (
               <Animated.View entering={FadeInDown.delay(Math.min(index, 10) * 30).duration(300)} style={{ flex: 1, paddingRight: (index % GRID_COLUMNS !== GRID_COLUMNS - 1) ? GRID_GAP : 0, marginBottom: GRID_GAP }}>
-                <Pressable onPress={() => { Haptics.selectionAsync(); router.push(`/content/${item.id}`); }}>
+                <Pressable onPress={() => { Haptics.selectionAsync(); router.push(buildContentRoute(item)); }}>
                   <View style={styles.gridShell}>
                     <View style={styles.gridCard}>
                     <Image source={{ uri: item.poster }} style={styles.gridPoster} contentFit="cover" transition={200} />
