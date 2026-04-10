@@ -10,6 +10,16 @@ import { theme } from '../constants/theme';
 
 type AuthMode = 'login' | 'register' | 'otp';
 
+const getEmailRedirectUrl = () => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return undefined;
+  }
+
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const repoBase = pathParts.length > 0 ? `/${pathParts[0]}` : '';
+  return `${window.location.origin}${repoBase}/login`;
+};
+
 export default function LoginScreen() {
   const { sendOTP, verifyOTPAndLogin, signInWithPassword, operationLoading } = useAuth();
   const { showAlert } = useAlert();
@@ -42,7 +52,9 @@ export default function LoginScreen() {
       showAlert('Error', 'Password must be at least 6 characters');
       return;
     }
-    const { error } = await sendOTP(email.trim());
+    const { error } = await sendOTP(email.trim(), {
+      emailRedirectTo: getEmailRedirectUrl(),
+    });
     if (error) {
       showAlert('Error', error);
       return;
