@@ -27,6 +27,8 @@ export default function AdminSeries() {
   const [form, setForm] = useState({ ...emptySeriesForm });
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [importing, setImporting] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   // Seasons/Episodes state
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
@@ -45,6 +47,13 @@ export default function AdminSeries() {
   useEffect(() => { load(); }, []);
 
   const resetForm = () => { setForm({ ...emptySeriesForm }); setEditingId(null); setViewMode('list'); };
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+  const clearSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  };
 
   const handleEdit = (s: Series) => {
     setEditingId(s.id);
@@ -80,6 +89,30 @@ export default function AdminSeries() {
     showAlert('Delete Series', `Delete "${title}" and all its seasons/episodes?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => { try { await api.deleteSeries(id); load(); } catch {} } },
+    ]);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.length === 0) {
+      showAlert('Nothing selected', 'Choose at least one series first.');
+      return;
+    }
+
+    showAlert('Delete selected series', `Delete ${selectedIds.length} selected series with all seasons and episodes?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await Promise.all(selectedIds.map((id) => api.deleteSeries(id)));
+            clearSelection();
+            await load();
+          } catch (err: any) {
+            showAlert('Delete failed', err.message || 'Some selected series could not be deleted.');
+          }
+        },
+      },
     ]);
   };
 
@@ -407,6 +440,27 @@ export default function AdminSeries() {
         <MaterialIcons name="add" size={20} color="#FFF" /><Text style={styles.addBtnText}>Add Series</Text>
       </Pressable>
 
+      <View style={styles.bulkToolbar}>
+        <Pressable style={[styles.bulkBtn, selectionMode && styles.bulkBtnActive]} onPress={() => selectionMode ? clearSelection() : setSelectionMode(true)}>
+          <MaterialIcons name={selectionMode ? 'close' : 'checklist'} size={18} color="#FFF" />
+          <Text style={styles.bulkBtnText}>{selectionMode ? 'Cancel Selection' : 'Select Multiple'}</Text>
+        </Pressable>
+        {selectionMode ? (
+          <>
+            <Pressable
+              style={styles.bulkBtnSecondary}
+              onPress={() => setSelectedIds(selectedIds.length === seriesList.length ? [] : seriesList.map((series) => series.id))}
+            >
+              <Text style={styles.bulkBtnSecondaryText}>{selectedIds.length === seriesList.length ? 'Clear All' : 'Select All'}</Text>
+            </Pressable>
+            <Pressable style={styles.bulkDangerBtn} onPress={handleDeleteSelected}>
+              <MaterialIcons name="delete-sweep" size={18} color="#FFF" />
+              <Text style={styles.bulkBtnText}>Delete Selected ({selectedIds.length})</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </View>
+
       <View style={styles.importCard}>
         <Text style={styles.formTitle}>Bulk Import M3U / M3U8</Text>
         <Text style={styles.importHint}>Import episodic content from a playlist URL using episode title detection.</Text>
@@ -428,6 +482,11 @@ export default function AdminSeries() {
       {seriesList.map((s, i) => (
         <Animated.View key={s.id} entering={FadeInDown.delay(Math.min(i, 8) * 40).duration(300)}>
           <View style={styles.itemCard}>
+            {selectionMode ? (
+              <Pressable style={styles.checkboxWrap} onPress={() => toggleSelect(s.id)}>
+                <MaterialIcons name={selectedIds.includes(s.id) ? 'check-circle' : 'radio-button-unchecked'} size={22} color={selectedIds.includes(s.id) ? theme.primary : theme.textMuted} />
+              </Pressable>
+            ) : null}
             <Image source={{ uri: s.poster }} style={styles.itemPoster} contentFit="cover" transition={200} />
             <View style={styles.itemInfo}>
               <Text style={styles.itemTitle} numberOfLines={1}>{s.title}</Text>
@@ -461,6 +520,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.primary, height: 48, borderRadius: 12, marginBottom: 16 },
   addBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  bulkToolbar: { gap: 10, marginBottom: 16 },
+  bulkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, height: 46 },
+  bulkBtnActive: { borderColor: theme.primary, backgroundColor: theme.primaryDark },
+  bulkBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  bulkBtnSecondary: { alignItems: 'center', justifyContent: 'center', borderRadius: 12, height: 42, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight },
+  bulkBtnSecondaryText: { fontSize: 13, fontWeight: '700', color: theme.textSecondary },
+  bulkDangerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.error, borderRadius: 12, height: 46 },
   importCard: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: theme.border, gap: 12 },
   importHint: { fontSize: 13, color: theme.textSecondary },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
@@ -486,6 +552,7 @@ const styles = StyleSheet.create({
   saveText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   countText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary, marginBottom: 12 },
   itemCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.border, gap: 12 },
+  checkboxWrap: { width: 28, alignItems: 'center', justifyContent: 'center' },
   itemPoster: { width: 50, height: 75, borderRadius: 8 },
   itemInfo: { flex: 1, gap: 2 },
   itemTitle: { fontSize: 14, fontWeight: '600', color: '#FFF' },

@@ -27,6 +27,8 @@ export default function AdminMovies() {
   const [searchQuery, setSearchQuery] = useState('');
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [importing, setImporting] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const load = async () => {
     setLoading(true);
@@ -37,6 +39,13 @@ export default function AdminMovies() {
   useEffect(() => { load(); }, []);
 
   const resetForm = () => { setForm({ ...emptyForm }); setEditingId(null); setShowForm(false); };
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+  const clearSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  };
 
   const handleEdit = (movie: Movie) => {
     setEditingId(movie.id);
@@ -79,6 +88,30 @@ export default function AdminMovies() {
       { text: 'Delete', style: 'destructive', onPress: async () => {
         try { await api.deleteMovie(id); load(); } catch {}
       }},
+    ]);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.length === 0) {
+      showAlert('Nothing selected', 'Choose at least one movie first.');
+      return;
+    }
+
+    showAlert('Delete selected movies', `Delete ${selectedIds.length} selected movies? This cannot be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await Promise.all(selectedIds.map((id) => api.deleteMovie(id)));
+            clearSelection();
+            await load();
+          } catch (err: any) {
+            showAlert('Delete failed', err.message || 'Some selected movies could not be deleted.');
+          }
+        },
+      },
     ]);
   };
 
@@ -135,6 +168,27 @@ export default function AdminMovies() {
       <Pressable style={styles.addBtn} onPress={() => { resetForm(); setShowForm(true); }}>
         <MaterialIcons name="add" size={20} color="#FFF" /><Text style={styles.addBtnText}>Add Movie</Text>
       </Pressable>
+
+      <View style={styles.bulkToolbar}>
+        <Pressable style={[styles.bulkBtn, selectionMode && styles.bulkBtnActive]} onPress={() => selectionMode ? clearSelection() : setSelectionMode(true)}>
+          <MaterialIcons name={selectionMode ? 'close' : 'checklist'} size={18} color="#FFF" />
+          <Text style={styles.bulkBtnText}>{selectionMode ? 'Cancel Selection' : 'Select Multiple'}</Text>
+        </Pressable>
+        {selectionMode ? (
+          <>
+            <Pressable
+              style={styles.bulkBtnSecondary}
+              onPress={() => setSelectedIds(selectedIds.length === filteredMovies.length ? [] : filteredMovies.map((movie) => movie.id))}
+            >
+              <Text style={styles.bulkBtnSecondaryText}>{selectedIds.length === filteredMovies.length ? 'Clear All' : 'Select All'}</Text>
+            </Pressable>
+            <Pressable style={styles.bulkDangerBtn} onPress={handleDeleteSelected}>
+              <MaterialIcons name="delete-sweep" size={18} color="#FFF" />
+              <Text style={styles.bulkBtnText}>Delete Selected ({selectedIds.length})</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </View>
 
       <View style={styles.importCard}>
         <Text style={styles.formTitle}>Bulk Import M3U / M3U8</Text>
@@ -211,6 +265,11 @@ export default function AdminMovies() {
       {filteredMovies.map((movie, i) => (
         <Animated.View key={movie.id} entering={FadeInDown.delay(Math.min(i, 8) * 40).duration(300)}>
           <View style={styles.itemCard}>
+            {selectionMode ? (
+              <Pressable style={[styles.checkboxWrap, selectedIds.includes(movie.id) && styles.checkboxWrapActive]} onPress={() => toggleSelect(movie.id)}>
+                <MaterialIcons name={selectedIds.includes(movie.id) ? 'check-circle' : 'radio-button-unchecked'} size={22} color={selectedIds.includes(movie.id) ? theme.primary : theme.textMuted} />
+              </Pressable>
+            ) : null}
             <Image source={{ uri: movie.poster }} style={styles.itemPoster} contentFit="cover" transition={200} />
             <View style={styles.itemInfo}>
               <Text style={styles.itemTitle} numberOfLines={1}>{movie.title}</Text>
@@ -239,6 +298,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.primary, height: 48, borderRadius: 12, marginBottom: 16 },
   addBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  bulkToolbar: { gap: 10, marginBottom: 16 },
+  bulkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, height: 46 },
+  bulkBtnActive: { borderColor: theme.primary, backgroundColor: theme.primaryDark },
+  bulkBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  bulkBtnSecondary: { alignItems: 'center', justifyContent: 'center', borderRadius: 12, height: 42, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight },
+  bulkBtnSecondaryText: { fontSize: 13, fontWeight: '700', color: theme.textSecondary },
+  bulkDangerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.error, borderRadius: 12, height: 46 },
   importCard: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: theme.border, gap: 12 },
   importHint: { fontSize: 13, color: theme.textSecondary },
   formCard: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: theme.border },
@@ -261,6 +327,8 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 14, color: '#FFF' },
   countText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary, marginBottom: 12 },
   itemCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.border, gap: 12 },
+  checkboxWrap: { width: 28, alignItems: 'center', justifyContent: 'center' },
+  checkboxWrapActive: { opacity: 1 },
   itemPoster: { width: 50, height: 75, borderRadius: 8 },
   itemInfo: { flex: 1, gap: 2 },
   itemTitle: { fontSize: 14, fontWeight: '600', color: '#FFF' },

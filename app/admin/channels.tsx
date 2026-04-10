@@ -25,11 +25,20 @@ export default function AdminChannels() {
   const [form, setForm] = useState({ ...emptyForm });
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [importing, setImporting] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const load = async () => { setLoading(true); try { setChannels(await api.fetchChannels()); } catch {} setLoading(false); };
   useEffect(() => { load(); }, []);
 
   const resetForm = () => { setForm({ ...emptyForm }); setEditingId(null); setShowForm(false); };
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+  const clearSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  };
 
   const handleEdit = (ch: Channel) => {
     setEditingId(ch.id);
@@ -60,6 +69,30 @@ export default function AdminChannels() {
     showAlert('Delete Channel', `Delete "${name}"?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => { try { await api.deleteChannel(id); load(); } catch {} } },
+    ]);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.length === 0) {
+      showAlert('Nothing selected', 'Choose at least one channel first.');
+      return;
+    }
+
+    showAlert('Delete selected channels', `Delete ${selectedIds.length} selected channels?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await Promise.all(selectedIds.map((id) => api.deleteChannel(id)));
+            clearSelection();
+            await load();
+          } catch (err: any) {
+            showAlert('Delete failed', err.message || 'Some selected channels could not be deleted.');
+          }
+        },
+      },
     ]);
   };
 
@@ -103,6 +136,27 @@ export default function AdminChannels() {
       <Pressable style={styles.addBtn} onPress={() => { resetForm(); setShowForm(true); }}>
         <MaterialIcons name="add" size={20} color="#FFF" /><Text style={styles.addBtnText}>Add Channel</Text>
       </Pressable>
+
+      <View style={styles.bulkToolbar}>
+        <Pressable style={[styles.bulkBtn, selectionMode && styles.bulkBtnActive]} onPress={() => selectionMode ? clearSelection() : setSelectionMode(true)}>
+          <MaterialIcons name={selectionMode ? 'close' : 'checklist'} size={18} color="#FFF" />
+          <Text style={styles.bulkBtnText}>{selectionMode ? 'Cancel Selection' : 'Select Multiple'}</Text>
+        </Pressable>
+        {selectionMode ? (
+          <>
+            <Pressable
+              style={styles.bulkBtnSecondary}
+              onPress={() => setSelectedIds(selectedIds.length === channels.length ? [] : channels.map((channel) => channel.id))}
+            >
+              <Text style={styles.bulkBtnSecondaryText}>{selectedIds.length === channels.length ? 'Clear All' : 'Select All'}</Text>
+            </Pressable>
+            <Pressable style={styles.bulkDangerBtn} onPress={handleDeleteSelected}>
+              <MaterialIcons name="delete-sweep" size={18} color="#FFF" />
+              <Text style={styles.bulkBtnText}>Delete Selected ({selectedIds.length})</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </View>
 
       <View style={styles.importCard}>
         <Text style={styles.formTitle}>Bulk Import M3U / M3U8</Text>
@@ -171,6 +225,11 @@ export default function AdminChannels() {
       {channels.map((ch, i) => (
         <Animated.View key={ch.id} entering={FadeInDown.delay(Math.min(i, 8) * 40).duration(300)}>
           <View style={styles.itemCard}>
+            {selectionMode ? (
+              <Pressable style={styles.checkboxWrap} onPress={() => toggleSelect(ch.id)}>
+                <MaterialIcons name={selectedIds.includes(ch.id) ? 'check-circle' : 'radio-button-unchecked'} size={22} color={selectedIds.includes(ch.id) ? theme.primary : theme.textMuted} />
+              </Pressable>
+            ) : null}
             <View style={styles.channelLogo}>
               <Image source={{ uri: ch.logo }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={200} />
             </View>
@@ -200,6 +259,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.primary, height: 48, borderRadius: 12, marginBottom: 16 },
   addBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  bulkToolbar: { gap: 10, marginBottom: 16 },
+  bulkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, height: 46 },
+  bulkBtnActive: { borderColor: theme.primary, backgroundColor: theme.primaryDark },
+  bulkBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  bulkBtnSecondary: { alignItems: 'center', justifyContent: 'center', borderRadius: 12, height: 42, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight },
+  bulkBtnSecondaryText: { fontSize: 13, fontWeight: '700', color: theme.textSecondary },
+  bulkDangerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.error, borderRadius: 12, height: 46 },
   importCard: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: theme.border, gap: 12 },
   importHint: { fontSize: 13, color: theme.textSecondary },
   formCard: { backgroundColor: theme.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: theme.border },
@@ -219,6 +285,7 @@ const styles = StyleSheet.create({
   saveText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   countText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary, marginBottom: 12 },
   itemCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.surface, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: theme.border, gap: 12 },
+  checkboxWrap: { width: 28, alignItems: 'center', justifyContent: 'center' },
   channelLogo: { width: 50, height: 50, borderRadius: 10, overflow: 'hidden', backgroundColor: theme.surfaceLight },
   itemInfo: { flex: 1, gap: 2 },
   itemTitle: { fontSize: 14, fontWeight: '600', color: '#FFF' },
