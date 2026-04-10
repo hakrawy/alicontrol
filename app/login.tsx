@@ -63,32 +63,41 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <Image
-        source={require('../assets/images/hero-banner.jpg')}
+        source={require('../assets/images/watchroom-hero.jpg')}
         style={StyleSheet.absoluteFill}
         contentFit="cover"
       />
       <LinearGradient
-        colors={['rgba(6,12,28,0.2)', 'rgba(9,19,43,0.72)', 'rgba(5,10,22,0.96)', theme.background]}
+        colors={['rgba(2,6,23,0.18)', 'rgba(6,24,38,0.7)', 'rgba(2,8,24,0.96)', theme.background]}
         style={StyleSheet.absoluteFill}
-        locations={[0, 0.32, 0.68, 1]}
+        locations={[0, 0.3, 0.7, 1]}
       />
       <LinearGradient
-        colors={['rgba(34,197,94,0.22)', 'transparent']}
+        colors={['rgba(16,185,129,0.24)', 'transparent']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.topGlow}
       />
       <LinearGradient
-        colors={['rgba(59,130,246,0.24)', 'transparent']}
+        colors={['rgba(56,189,248,0.28)', 'transparent']}
         start={{ x: 1, y: 0 }}
         end={{ x: 0, y: 1 }}
         style={styles.sideGlow}
       />
+      <View style={styles.portalHalo} />
+      <View style={styles.portalRing} />
+      <View style={styles.lightOrbA} />
+      <View style={styles.lightOrbB} />
+      <View style={styles.lightOrbC} />
       <SafeAreaView style={{ flex: 1 }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {/* Logo */}
             <Animated.View entering={FadeInDown.duration(500)} style={styles.logoSection}>
+              <View style={styles.heroPill}>
+                <MaterialIcons name="auto-awesome" size={16} color="#D9F99D" />
+                <Text style={styles.heroPillText}>Cinematic Fantasy Experience</Text>
+              </View>
               <View style={styles.logoBadge}>
                 <LinearGradient colors={['#60A5FA', '#22C55E']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.logoBadgeGradient}>
                   <MaterialIcons name="play-circle-filled" size={54} color="#F8FAFC" />
@@ -96,6 +105,23 @@ export default function LoginScreen() {
               </View>
               <Text style={styles.appName}>Ali Control</Text>
               <Text style={styles.tagline}>All rights reserved to Ali Dohol</Text>
+              <Text style={styles.heroDescription}>
+                Step into a richer streaming universe with glowing scenes, premium live channels, and a world that feels built for movie nights.
+              </Text>
+              <View style={styles.featureRow}>
+                <View style={styles.featureChip}>
+                  <MaterialIcons name="live-tv" size={15} color="#A7F3D0" />
+                  <Text style={styles.featureChipText}>Live Channels</Text>
+                </View>
+                <View style={styles.featureChip}>
+                  <MaterialIcons name="theaters" size={15} color="#BFDBFE" />
+                  <Text style={styles.featureChipText}>Epic Library</Text>
+                </View>
+                <View style={styles.featureChip}>
+                  <MaterialIcons name="groups" size={15} color="#FDE68A" />
+                  <Text style={styles.featureChipText}>Watch Rooms</Text>
+                </View>
+              </View>
             </Animated.View>
 
             {/* Form */}
@@ -199,51 +225,156 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   topGlow: {
     position: 'absolute',
-    top: -60,
-    left: -30,
-    width: 260,
-    height: 260,
-    borderRadius: 130,
+    top: -90,
+    left: -20,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
   },
   sideGlow: {
     position: 'absolute',
-    top: 120,
-    right: -40,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
+    top: 90,
+    right: -70,
+    width: 340,
+    height: 340,
+    borderRadius: 170,
   },
-  scrollContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 40 },
-  logoSection: { alignItems: 'center', marginBottom: 40, gap: 8 },
+  portalHalo: {
+    position: 'absolute',
+    top: 120,
+    alignSelf: 'center',
+    width: 360,
+    height: 360,
+    borderRadius: 180,
+    backgroundColor: 'rgba(20,184,166,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(125,211,252,0.08)',
+  },
+  portalRing: {
+    position: 'absolute',
+    top: 145,
+    alignSelf: 'center',
+    width: 310,
+    height: 310,
+    borderRadius: 155,
+    borderWidth: 2,
+    borderColor: 'rgba(125,211,252,0.14)',
+    backgroundColor: 'rgba(15,23,42,0.05)',
+  },
+  lightOrbA: {
+    position: 'absolute',
+    top: 210,
+    left: 46,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(190,242,100,0.95)',
+    shadowColor: '#BEF264',
+    shadowOpacity: 0.8,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  lightOrbB: {
+    position: 'absolute',
+    top: 180,
+    right: 58,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(125,211,252,0.95)',
+    shadowColor: '#7DD3FC',
+    shadowOpacity: 0.8,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  lightOrbC: {
+    position: 'absolute',
+    top: 360,
+    right: 120,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: 'rgba(251,191,36,0.9)',
+    shadowColor: '#FBBF24',
+    shadowOpacity: 0.8,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  scrollContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingTop: 48, paddingBottom: 40 },
+  logoSection: { alignItems: 'center', marginBottom: 36, gap: 10 },
+  heroPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(15,23,42,0.62)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(190,242,100,0.18)',
+    marginBottom: 6,
+  },
+  heroPillText: { color: '#E2F7D5', fontSize: 12, fontWeight: '700', letterSpacing: 0.3 },
   logoBadge: {
     borderRadius: 999,
     padding: 2,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    marginBottom: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginBottom: 4,
     shadowColor: '#22C55E',
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.34,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
   },
   logoBadgeGradient: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 92,
+    height: 92,
+    borderRadius: 46,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  appName: { fontSize: 34, fontWeight: '800', color: '#F8FAFC', letterSpacing: -1.1 },
+  appName: { fontSize: 38, fontWeight: '800', color: '#F8FAFC', letterSpacing: -1.15 },
   tagline: { fontSize: 14, color: '#D7E3F4', fontWeight: '600', textAlign: 'center' },
+  heroDescription: {
+    fontSize: 14,
+    color: '#DCE8F8',
+    textAlign: 'center',
+    lineHeight: 22,
+    maxWidth: 620,
+    paddingHorizontal: 8,
+  },
+  featureRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 4,
+  },
+  featureChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(9,15,30,0.58)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.16)',
+  },
+  featureChipText: {
+    color: '#E2E8F0',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   formCard: {
-    backgroundColor: 'rgba(9,15,30,0.84)',
-    borderRadius: 24,
+    backgroundColor: 'rgba(7,12,24,0.82)',
+    borderRadius: 28,
     padding: 24,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.22)',
+    borderColor: 'rgba(125,211,252,0.18)',
     shadowColor: '#020617',
-    shadowOpacity: 0.28,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.34,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 12 },
   },
   formTitle: { fontSize: 22, fontWeight: '700', color: '#FFF', marginBottom: 4 },
   formSubtitle: { fontSize: 14, color: theme.textSecondary, marginBottom: 24 },
