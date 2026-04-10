@@ -124,7 +124,10 @@ export default function AdminSeries() {
     setImporting(true);
     try {
       const result = await api.importSeriesFromM3UUrl(playlistUrl.trim());
-      showAlert('Import complete', `Imported ${result.importedSeries} series and ${result.importedEpisodes} episodes.`);
+      showAlert(
+        'Import complete',
+        `Validated ${result.validated} of ${result.total} entries. Imported ${result.importedSeries} series and ${result.importedEpisodes} episodes, skipped ${result.skipped}.${result.failedSamples.length ? ` Sample failures: ${result.failedSamples.join(', ')}` : ''}`
+      );
       setPlaylistUrl('');
       await load();
     } catch (err: any) {

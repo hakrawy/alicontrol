@@ -17,6 +17,14 @@ export interface M3UEntry {
   rawAttributes: Record<string, string>;
 }
 
+export interface ImportValidationSummary {
+  imported: number;
+  total: number;
+  validated: number;
+  skipped: number;
+  failedSamples: string[];
+}
+
 export type ViewerContentType = 'movie' | 'series' | 'channel';
 
 export interface Movie {
@@ -345,6 +353,129 @@ function sanitizePosterUrl(url: string, fallback: string) {
   return url.trim() || fallback;
 }
 
+const STREAM_VALIDATION_TIMEOUT_MS = 5000;
+const STREAM_VALIDATION_CONCURRENCY = 10;
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = STREAM_VALIDATION_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function looksLikeDirectMediaUrl(url: string) {
+  return /\.(m3u8|mp4|m4v|mov|webm|mpd)(\?.*)?$/i.test(url);
+}
+
+async function validateStreamUrl(url: string) {
+  if (!isHttpUrl(url)) {
+    return { ok: false, reason: 'invalid_url' };
+  }
+
+  const extensionHint = url.toLowerCase();
+
+  try {
+    const headResponse = await fetchWithTimeout(url, { method: 'HEAD', redirect: 'follow' });
+    if (headResponse.ok) {
+      const contentType = (headResponse.headers.get('content-type') || '').toLowerCase();
+      if (
+        contentType.includes('application/vnd.apple.mpegurl') ||
+        contentType.includes('application/x-mpegurl') ||
+        contentType.includes('audio/mpegurl') ||
+        extensionHint.includes('.m3u8')
+      ) {
+        const manifestResponse = await fetchWithTimeout(url, { method: 'GET', redirect: 'follow' });
+        if (!manifestResponse.ok) {
+          return { ok: false, reason: `manifest_status_${manifestResponse.status}` };
+        }
+        const manifestText = await manifestResponse.text();
+        return { ok: /#EXTM3U|#EXTINF|#EXT-X-TARGETDURATION/i.test(manifestText), reason: 'manifest_check' };
+      }
+
+      if (
+        contentType.includes('video/') ||
+        contentType.includes('audio/') ||
+        contentType.includes('application/octet-stream') ||
+        looksLikeDirectMediaUrl(url)
+      ) {
+        return { ok: true, reason: 'head_check' };
+      }
+    }
+  } catch {
+    // Fallback to a lightweight GET validation below.
+  }
+
+  try {
+    const getResponse = await fetchWithTimeout(url, { method: 'GET', redirect: 'follow' });
+    if (!getResponse.ok) {
+      return { ok: false, reason: `get_status_${getResponse.status}` };
+    }
+
+    const contentType = (getResponse.headers.get('content-type') || '').toLowerCase();
+    if (
+      contentType.includes('video/') ||
+      contentType.includes('audio/') ||
+      contentType.includes('application/octet-stream')
+    ) {
+      return { ok: true, reason: 'get_media_check' };
+    }
+
+    if (
+      contentType.includes('application/vnd.apple.mpegurl') ||
+      contentType.includes('application/x-mpegurl') ||
+      contentType.includes('audio/mpegurl') ||
+      extensionHint.includes('.m3u8')
+    ) {
+      const manifestText = await getResponse.text();
+      return { ok: /#EXTM3U|#EXTINF|#EXT-X-TARGETDURATION/i.test(manifestText), reason: 'manifest_check' };
+    }
+
+    if (looksLikeDirectMediaUrl(url)) {
+      return { ok: true, reason: 'extension_hint' };
+    }
+  } catch {
+    return { ok: false, reason: 'fetch_failed' };
+  }
+
+  return { ok: false, reason: 'unsupported_response' };
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>) {
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (currentIndex < items.length) {
+      const index = currentIndex;
+      currentIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function validatePlaylistEntries(entries: M3UEntry[]) {
+  const validationResults = await mapWithConcurrency(entries, STREAM_VALIDATION_CONCURRENCY, async (entry) => {
+    const validation = await validateStreamUrl(entry.url);
+    return { entry, validation };
+  });
+
+  const validEntries = validationResults.filter((item) => item.validation.ok).map((item) => item.entry);
+  const invalidEntries = validationResults.filter((item) => !item.validation.ok);
+
+  return {
+    validEntries,
+    validated: validEntries.length,
+    skipped: invalidEntries.length,
+    failedSamples: invalidEntries.slice(0, 8).map((item) => `${item.entry.title} (${item.validation.reason})`),
+  };
+}
+
 function inferM3UContentKind(entry: M3UEntry): 'channel' | 'movie' | 'series' {
   const haystack = `${entry.title} ${entry.groupTitle}`.toLowerCase();
   if (/(s\d{1,2}e\d{1,2}|season\s*\d+|episode\s*\d+)/i.test(entry.title)) return 'series';
@@ -389,9 +520,10 @@ export async function importChannelsFromM3UUrl(playlistUrl: string) {
 
   const content = await response.text();
   const entries = parseM3UPlaylist(content).filter((entry) => inferM3UContentKind(entry) === 'channel');
+  const { validEntries, validated, skipped, failedSamples } = await validatePlaylistEntries(entries);
   let imported = 0;
 
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, entry] of validEntries.entries()) {
     await upsertChannel({
       name: entry.title,
       logo: sanitizePosterUrl(entry.logo, ''),
@@ -407,7 +539,7 @@ export async function importChannelsFromM3UUrl(playlistUrl: string) {
     imported += 1;
   }
 
-  return { imported, total: entries.length };
+  return { imported, total: entries.length, validated, skipped, failedSamples } as ImportValidationSummary;
 }
 
 export async function importMoviesFromM3UUrl(playlistUrl: string) {
@@ -418,9 +550,10 @@ export async function importMoviesFromM3UUrl(playlistUrl: string) {
 
   const content = await response.text();
   const entries = parseM3UPlaylist(content).filter((entry) => inferM3UContentKind(entry) === 'movie');
+  const { validEntries, validated, skipped, failedSamples } = await validatePlaylistEntries(entries);
   let imported = 0;
 
-  for (const entry of entries) {
+  for (const entry of validEntries) {
     await upsertMovie({
       title: entry.title,
       description: `Imported from M3U playlist${entry.groupTitle ? ` - ${entry.groupTitle}` : ''}.`,
@@ -444,7 +577,7 @@ export async function importMoviesFromM3UUrl(playlistUrl: string) {
     imported += 1;
   }
 
-  return { imported, total: entries.length };
+  return { imported, total: entries.length, validated, skipped, failedSamples } as ImportValidationSummary;
 }
 
 export async function importSeriesFromM3UUrl(playlistUrl: string) {
@@ -455,12 +588,13 @@ export async function importSeriesFromM3UUrl(playlistUrl: string) {
 
   const content = await response.text();
   const entries = parseM3UPlaylist(content).filter((entry) => inferM3UContentKind(entry) === 'series');
+  const { validEntries, validated, skipped, failedSamples } = await validatePlaylistEntries(entries);
   const seriesMap = new Map<string, { id: string; title: string }>();
   const seasonMap = new Map<string, string>();
   let importedSeries = 0;
   let importedEpisodes = 0;
 
-  for (const entry of entries) {
+  for (const entry of validEntries) {
     const tokens = parseSeriesTokens(entry.title);
     let seriesId = seriesMap.get(tokens.seriesTitle)?.id;
 
@@ -518,7 +652,7 @@ export async function importSeriesFromM3UUrl(playlistUrl: string) {
     await updateSeriesCounts(id);
   }
 
-  return { importedSeries, importedEpisodes, total: entries.length };
+  return { imported: importedEpisodes, total: entries.length, validated, skipped, failedSamples, importedSeries, importedEpisodes };
 }
 
 export function getPrimaryStreamUrl(value: { stream_url?: string; stream_sources?: StreamSource[] }) {

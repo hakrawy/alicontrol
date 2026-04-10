@@ -104,7 +104,10 @@ export default function AdminChannels() {
     setImporting(true);
     try {
       const result = await api.importChannelsFromM3UUrl(playlistUrl.trim());
-      showAlert('Import complete', `Imported ${result.imported} channels from the playlist.`);
+      showAlert(
+        'Import complete',
+        `Validated ${result.validated} of ${result.total} entries. Imported ${result.imported} channels and skipped ${result.skipped}.${result.failedSamples.length ? ` Sample failures: ${result.failedSamples.join(', ')}` : ''}`
+      );
       setPlaylistUrl('');
       await load();
     } catch (err: any) {

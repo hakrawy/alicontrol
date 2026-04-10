@@ -123,7 +123,10 @@ export default function AdminMovies() {
     setImporting(true);
     try {
       const result = await api.importMoviesFromM3UUrl(playlistUrl.trim());
-      showAlert('Import complete', `Imported ${result.imported} movies from the playlist.`);
+      showAlert(
+        'Import complete',
+        `Validated ${result.validated} of ${result.total} entries. Imported ${result.imported} movies and skipped ${result.skipped}.${result.failedSamples.length ? ` Sample failures: ${result.failedSamples.join(', ')}` : ''}`
+      );
       setPlaylistUrl('');
       await load();
     } catch (err: any) {
