@@ -3,14 +3,14 @@ import { View, Text, ScrollView, Pressable, StyleSheet, RefreshControl } from 'r
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useAuth, useAlert } from '@/template';
-import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import { useAuth, useAlert, getSupabaseClient } from '@/template';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import { useAppContext } from '../../contexts/AppContext';
 import { getPreferences } from '../../services/preferences';
 
-interface SettingsItem { id: string; icon: string; label: string; subtitle?: string; color?: string; chevron?: boolean; route?: string }
+interface SettingsItem { id: string; icon: string; label: string; subtitle?: string; color?: string; chevron?: boolean; slug?: string }
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -20,6 +20,35 @@ export default function ProfileScreen() {
   const { favorites, watchHistory, isAdmin, refreshHome } = useAppContext();
   const [refreshing, setRefreshing] = useState(false);
   const [preferenceMeta, setPreferenceMeta] = useState({ language: 'English', videoQuality: 'Auto' });
+  const [profileMeta, setProfileMeta] = useState({ username: '', display_name: '', avatar: '' });
+
+  const loadProfileMeta = useCallback(async () => {
+    if (!user?.id) {
+      setProfileMeta({ username: '', display_name: '', avatar: '' });
+      return;
+    }
+
+    try {
+      const supabase = getSupabaseClient();
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('username, display_name, avatar')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      setProfileMeta({
+        username: data?.username || user.username || '',
+        display_name: data?.display_name || '',
+        avatar: data?.avatar || '',
+      });
+    } catch {
+      setProfileMeta({
+        username: user.username || '',
+        display_name: '',
+        avatar: '',
+      });
+    }
+  }, [user?.id, user?.username]);
 
   useEffect(() => {
     void (async () => {
@@ -31,38 +60,42 @@ export default function ProfileScreen() {
     })();
   }, []);
 
+  useEffect(() => {
+    void loadProfileMeta();
+  }, [loadProfileMeta]);
+
   const settingsGroups = useMemo<{ title: string; items: SettingsItem[] }[]>(() => [
     {
       title: 'ACCOUNT',
       items: [
-        { id: 's1', icon: 'person-outline', label: 'Edit Profile', chevron: true, route: '/settings/edit-profile' },
-        { id: 's2', icon: 'notifications-none', label: 'Notifications', chevron: true, route: '/settings/notifications' },
-        { id: 's3', icon: 'download', label: 'Downloads', chevron: true, route: '/settings/downloads' },
+        { id: 's1', icon: 'person-outline', label: 'Edit Profile', chevron: true, slug: 'edit-profile' },
+        { id: 's2', icon: 'notifications-none', label: 'Notifications', chevron: true, slug: 'notifications' },
+        { id: 's3', icon: 'download', label: 'Downloads', chevron: true, slug: 'downloads' },
       ],
     },
     {
       title: 'PREFERENCES',
       items: [
-        { id: 's5', icon: 'translate', label: 'Language', subtitle: preferenceMeta.language, chevron: true, route: '/settings/language' },
-        { id: 's6', icon: 'subtitles', label: 'Subtitle Preferences', chevron: true, route: '/settings/subtitle-preferences' },
-        { id: 's7', icon: 'hd', label: 'Video Quality', subtitle: preferenceMeta.videoQuality, chevron: true, route: '/settings/video-quality' },
+        { id: 's5', icon: 'translate', label: 'Language', subtitle: preferenceMeta.language, chevron: true, slug: 'language' },
+        { id: 's6', icon: 'subtitles', label: 'Subtitle Preferences', chevron: true, slug: 'subtitle-preferences' },
+        { id: 's7', icon: 'hd', label: 'Video Quality', subtitle: preferenceMeta.videoQuality, chevron: true, slug: 'video-quality' },
       ],
     },
     {
       title: 'SUPPORT',
       items: [
-        { id: 's9', icon: 'help-outline', label: 'Help Center', chevron: true, route: '/settings/help-center' },
-        { id: 's10', icon: 'privacy-tip', label: 'Privacy Policy', chevron: true, route: '/settings/privacy-policy' },
-        { id: 's11', icon: 'description', label: 'Terms of Service', chevron: true, route: '/settings/terms-of-service' },
+        { id: 's9', icon: 'help-outline', label: 'Help Center', chevron: true, slug: 'help-center' },
+        { id: 's10', icon: 'privacy-tip', label: 'Privacy Policy', chevron: true, slug: 'privacy-policy' },
+        { id: 's11', icon: 'description', label: 'Terms of Service', chevron: true, slug: 'terms-of-service' },
       ],
     },
   ], [preferenceMeta.language, preferenceMeta.videoQuality]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await refreshHome();
+    await Promise.all([refreshHome(), loadProfileMeta()]);
     setRefreshing(false);
-  }, [refreshHome]);
+  }, [loadProfileMeta, refreshHome]);
 
   const handleLogout = () => {
     showAlert('Sign Out', 'Are you sure you want to sign out?', [
@@ -74,19 +107,26 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const displayName = profileMeta.display_name || profileMeta.username || user?.username || user?.email?.split('@')[0] || 'User';
+  const avatarLetter = (displayName?.[0] || user?.email?.[0] || 'U').toUpperCase();
+
   return (
     <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.primary} colors={[theme.primary]} progressBackgroundColor={theme.surface} />}>
         <Animated.View entering={FadeInDown.duration(400)} style={styles.profileHeader}>
           <View style={styles.avatarWrap}>
-            <View style={styles.avatarFallback}>
-              <Text style={styles.avatarLetter}>{(user?.email?.[0] || 'U').toUpperCase()}</Text>
-            </View>
+            {profileMeta.avatar ? (
+              <Image source={{ uri: profileMeta.avatar }} style={styles.avatarImage} contentFit="cover" transition={200} />
+            ) : (
+              <View style={styles.avatarFallback}>
+                <Text style={styles.avatarLetter}>{avatarLetter}</Text>
+              </View>
+            )}
             {isAdmin ? (
               <View style={styles.premiumBadge}><MaterialIcons name="admin-panel-settings" size={14} color="#000" /></View>
             ) : null}
           </View>
-          <Text style={styles.userName}>{user?.username || user?.email?.split('@')[0] || 'User'}</Text>
+          <Text style={styles.userName}>{displayName}</Text>
           <Text style={styles.userEmail}>{user?.email || ''}</Text>
           {isAdmin ? (
             <Pressable style={styles.adminBtn} onPress={() => router.push('/admin')}>
@@ -108,8 +148,9 @@ export default function ProfileScreen() {
             <View style={styles.groupCard}>
               {group.items.map((item, index) => (
                 <Pressable key={item.id} style={[styles.settingsRow, index < group.items.length - 1 && styles.settingsRowBorder]} onPress={() => {
-                  Haptics.selectionAsync();
-                  if (item.route) router.push(item.route as any);
+                  if (item.slug) {
+                    router.push({ pathname: '/settings/[slug]', params: { slug: item.slug } });
+                  }
                 }}>
                   <View style={[styles.settingsIconWrap, item.color ? { backgroundColor: `${item.color}20` } : {}]}>
                     <MaterialIcons name={item.icon as any} size={20} color={item.color || theme.textSecondary} />
@@ -141,6 +182,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   profileHeader: { alignItems: 'center', paddingTop: 16, paddingBottom: 24 },
   avatarWrap: { position: 'relative', marginBottom: 14 },
+  avatarImage: { width: 90, height: 90, borderRadius: 45, borderWidth: 3, borderColor: theme.primaryLight },
   avatarFallback: { width: 90, height: 90, borderRadius: 45, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: theme.primaryLight },
   avatarLetter: { fontSize: 36, fontWeight: '700', color: '#FFF' },
   premiumBadge: { position: 'absolute', bottom: 0, right: 0, width: 26, height: 26, borderRadius: 13, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: theme.background },

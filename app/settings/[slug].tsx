@@ -105,6 +105,7 @@ export default function SettingsDetailScreen() {
 
       if (error) throw error;
       showAlert('Saved', 'Your profile details were updated successfully.');
+      router.replace('/(tabs)/profile');
     } catch (error: any) {
       showAlert('Save failed', error.message || 'Unable to update your profile right now.');
     } finally {

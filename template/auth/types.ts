@@ -48,7 +48,7 @@ export interface AuthContextType {
   operationLoading: boolean;
   initialized: boolean;
   setOperationLoading: (loading: boolean) => void;
-  sendOTP: (email: string) => Promise<SendOTPResult>;
+  sendOTP: (email: string, options?: SendOTPOptions) => Promise<SendOTPResult>;
   verifyOTPAndLogin: (email: string, otp: string, options?: VerifyOTPOptions) => Promise<AuthResult>;
   signUpWithPassword: (email: string, password: string, metadata?: Record<string, any>) => Promise<SignUpResult>;
   signInWithPassword: (email: string, password: string) => Promise<AuthResult>;
