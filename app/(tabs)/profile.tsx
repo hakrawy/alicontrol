@@ -1,14 +1,17 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useAuth, useAlert, getSupabaseClient } from '@/template';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import { useAppContext } from '../../contexts/AppContext';
 import { getPreferences } from '../../services/preferences';
+import { useLocale } from '../../contexts/LocaleContext';
+import { localizePreferenceValue } from '../../constants/i18n';
 
 interface SettingsItem { id: string; icon: string; label: string; subtitle?: string; color?: string; chevron?: boolean; slug?: string }
 
@@ -16,6 +19,7 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, logout } = useAuth();
+  const { t, language } = useLocale();
   const { showAlert } = useAlert();
   const { favorites, watchHistory, isAdmin, refreshHome } = useAppContext();
   const [refreshing, setRefreshing] = useState(false);
@@ -50,46 +54,45 @@ export default function ProfileScreen() {
     }
   }, [user?.id, user?.username]);
 
-  useEffect(() => {
-    void (async () => {
-      const preferences = await getPreferences();
-      setPreferenceMeta({
-        language: preferences.language,
-        videoQuality: preferences.videoQuality,
-      });
-    })();
+  const loadPreferenceMeta = useCallback(async () => {
+    const preferences = await getPreferences();
+    setPreferenceMeta({
+      language: preferences.language,
+      videoQuality: preferences.videoQuality,
+    });
   }, []);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     void loadProfileMeta();
-  }, [loadProfileMeta]);
+    void loadPreferenceMeta();
+  }, [loadPreferenceMeta, loadProfileMeta]));
 
   const settingsGroups = useMemo<{ title: string; items: SettingsItem[] }[]>(() => [
     {
-      title: 'ACCOUNT',
+      title: t('profile.account'),
       items: [
-        { id: 's1', icon: 'person-outline', label: 'Edit Profile', chevron: true, slug: 'edit-profile' },
-        { id: 's2', icon: 'notifications-none', label: 'Notifications', chevron: true, slug: 'notifications' },
-        { id: 's3', icon: 'download', label: 'Downloads', chevron: true, slug: 'downloads' },
+        { id: 's1', icon: 'person-outline', label: t('profile.editProfile'), chevron: true, slug: 'edit-profile' },
+        { id: 's2', icon: 'notifications-none', label: t('profile.notifications'), chevron: true, slug: 'notifications' },
+        { id: 's3', icon: 'download', label: t('profile.downloads'), chevron: true, slug: 'downloads' },
       ],
     },
     {
-      title: 'PREFERENCES',
+      title: t('profile.preferences'),
       items: [
-        { id: 's5', icon: 'translate', label: 'Language', subtitle: preferenceMeta.language, chevron: true, slug: 'language' },
-        { id: 's6', icon: 'subtitles', label: 'Subtitle Preferences', chevron: true, slug: 'subtitle-preferences' },
-        { id: 's7', icon: 'hd', label: 'Video Quality', subtitle: preferenceMeta.videoQuality, chevron: true, slug: 'video-quality' },
+        { id: 's5', icon: 'translate', label: t('profile.language'), subtitle: localizePreferenceValue(language, preferenceMeta.language), chevron: true, slug: 'language' },
+        { id: 's6', icon: 'subtitles', label: t('profile.subtitlePreferences'), chevron: true, slug: 'subtitle-preferences' },
+        { id: 's7', icon: 'hd', label: t('profile.videoQuality'), subtitle: localizePreferenceValue(language, preferenceMeta.videoQuality), chevron: true, slug: 'video-quality' },
       ],
     },
     {
-      title: 'SUPPORT',
+      title: t('profile.support'),
       items: [
-        { id: 's9', icon: 'help-outline', label: 'Help Center', chevron: true, slug: 'help-center' },
-        { id: 's10', icon: 'privacy-tip', label: 'Privacy Policy', chevron: true, slug: 'privacy-policy' },
-        { id: 's11', icon: 'description', label: 'Terms of Service', chevron: true, slug: 'terms-of-service' },
+        { id: 's9', icon: 'help-outline', label: t('profile.helpCenter'), chevron: true, slug: 'help-center' },
+        { id: 's10', icon: 'privacy-tip', label: t('profile.privacyPolicy'), chevron: true, slug: 'privacy-policy' },
+        { id: 's11', icon: 'description', label: t('profile.terms'), chevron: true, slug: 'terms-of-service' },
       ],
     },
-  ], [preferenceMeta.language, preferenceMeta.videoQuality]);
+  ], [language, preferenceMeta.language, preferenceMeta.videoQuality, t]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -131,15 +134,15 @@ export default function ProfileScreen() {
           {isAdmin ? (
             <Pressable style={styles.adminBtn} onPress={() => router.push('/admin')}>
               <MaterialIcons name="dashboard" size={16} color="#FFF" />
-              <Text style={styles.adminBtnText}>Admin Dashboard</Text>
+              <Text style={styles.adminBtnText}>{t('profile.adminDashboard')}</Text>
             </Pressable>
           ) : null}
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(100).duration(400)} style={styles.statsRow}>
-          <View style={styles.statCard}><Text style={styles.statValue}>{favorites.length}</Text><Text style={styles.statLabel}>Favorites</Text></View>
+          <View style={styles.statCard}><Text style={styles.statValue}>{favorites.length}</Text><Text style={styles.statLabel}>{t('profile.favorites')}</Text></View>
           <View style={styles.statDivider} />
-          <View style={styles.statCard}><Text style={styles.statValue}>{watchHistory.length}</Text><Text style={styles.statLabel}>Watched</Text></View>
+          <View style={styles.statCard}><Text style={styles.statValue}>{watchHistory.length}</Text><Text style={styles.statLabel}>{t('profile.watched')}</Text></View>
         </Animated.View>
 
         {settingsGroups.map((group, gi) => (
@@ -169,7 +172,7 @@ export default function ProfileScreen() {
         <View style={styles.signOutWrap}>
           <Pressable style={styles.signOutBtn} onPress={handleLogout}>
             <MaterialIcons name="logout" size={20} color={theme.error} />
-            <Text style={styles.signOutText}>Sign Out</Text>
+            <Text style={styles.signOutText}>{t('profile.signOut')}</Text>
           </Pressable>
           <Text style={styles.versionText}>Ali Control v2.0.0</Text>
         </View>

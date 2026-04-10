@@ -8,6 +8,8 @@ import { useAlert, useAuth, getSupabaseClient } from '@/template';
 import { theme } from '../../constants/theme';
 import { defaultPreferences, getPreferences, resetPreferences, updatePreferences } from '../../services/preferences';
 import { useAppContext } from '../../contexts/AppContext';
+import { useLocale } from '../../contexts/LocaleContext';
+import { AppLanguage, localizePreferenceValue } from '../../constants/i18n';
 
 type SettingsSlug =
   | 'edit-profile'
@@ -21,7 +23,7 @@ type SettingsSlug =
   | 'terms-of-service';
 
 const OPTION_SECTIONS: Record<string, string[]> = {
-  language: ['English', 'Arabic', 'French', 'Turkish'],
+  language: ['English', 'Arabic'],
   subtitleLanguage: ['Arabic', 'English', 'None'],
   subtitleSize: ['Small', 'Medium', 'Large'],
   videoQuality: ['Auto', '4K', '1080p', '720p'],
@@ -37,6 +39,7 @@ export default function SettingsDetailScreen() {
   const router = useRouter();
   const { showAlert } = useAlert();
   const { user } = useAuth();
+  const { t, setLanguage, language } = useLocale();
   const { favorites, watchHistory } = useAppContext();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -74,23 +77,23 @@ export default function SettingsDetailScreen() {
 
   const pageTitle = useMemo(() => {
     const titles: Record<SettingsSlug, string> = {
-      'edit-profile': 'Edit Profile',
-      notifications: 'Notifications',
-      downloads: 'Downloads',
-      language: 'Language',
-      'subtitle-preferences': 'Subtitle Preferences',
-      'video-quality': 'Video Quality',
-      'help-center': 'Help Center',
-      'privacy-policy': 'Privacy Policy',
-      'terms-of-service': 'Terms of Service',
+      'edit-profile': t('settings.editProfile'),
+      notifications: t('settings.notifications'),
+      downloads: t('settings.downloads'),
+      language: t('settings.language'),
+      'subtitle-preferences': t('settings.subtitlePreferences'),
+      'video-quality': t('settings.videoQuality'),
+      'help-center': t('settings.helpCenter'),
+      'privacy-policy': t('settings.privacyPolicy'),
+      'terms-of-service': t('settings.terms'),
     };
     return titles[slug || 'help-center'];
-  }, [slug]);
+  }, [slug, t]);
 
   const saveProfile = async () => {
     if (!user?.id) return;
     if (!profileForm.username.trim()) {
-      showAlert('Missing username', 'Please add a username before saving.');
+      showAlert(t('settings.missingUsername'), t('settings.missingUsernameDesc'));
       return;
     }
 
@@ -104,10 +107,10 @@ export default function SettingsDetailScreen() {
       }).eq('id', user.id);
 
       if (error) throw error;
-      showAlert('Saved', 'Your profile details were updated successfully.');
+      showAlert(t('settings.saved'), t('settings.savedDesc'));
       router.replace('/(tabs)/profile');
     } catch (error: any) {
-      showAlert('Save failed', error.message || 'Unable to update your profile right now.');
+      showAlert(t('settings.saveFailed'), error.message || t('settings.saveFailedDesc'));
     } finally {
       setSaving(false);
     }
@@ -119,6 +122,13 @@ export default function SettingsDetailScreen() {
   };
 
   const selectPreference = async (key: keyof typeof preferences, value: string) => {
+    if (key === 'language') {
+      await setLanguage((value === 'Arabic' ? 'Arabic' : 'English') as AppLanguage);
+      const updatedPreferences = await getPreferences();
+      setPreferences(updatedPreferences);
+      return;
+    }
+
     const updated = await updatePreferences({ [key]: value });
     setPreferences(updated);
   };
@@ -135,13 +145,13 @@ export default function SettingsDetailScreen() {
         )}
       </View>
 
-      <SectionTitle>Public Identity</SectionTitle>
-      <TextInput style={styles.input} value={profileForm.display_name} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, display_name: value }))} placeholder="Display name" placeholderTextColor={theme.textMuted} />
-      <TextInput style={styles.input} value={profileForm.username} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, username: value }))} placeholder="Username" placeholderTextColor={theme.textMuted} />
-      <TextInput style={styles.input} value={profileForm.avatar} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, avatar: value }))} placeholder="Avatar image URL" placeholderTextColor={theme.textMuted} />
+      <SectionTitle>{t('settings.publicIdentity')}</SectionTitle>
+      <TextInput style={styles.input} value={profileForm.display_name} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, display_name: value }))} placeholder={t('settings.displayName')} placeholderTextColor={theme.textMuted} />
+      <TextInput style={styles.input} value={profileForm.username} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, username: value }))} placeholder={t('settings.username')} placeholderTextColor={theme.textMuted} />
+      <TextInput style={styles.input} value={profileForm.avatar} onChangeText={(value) => setProfileForm((prev) => ({ ...prev, avatar: value }))} placeholder={t('settings.avatarUrl')} placeholderTextColor={theme.textMuted} />
 
       <Pressable style={styles.primaryButton} onPress={() => void saveProfile()}>
-        <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : 'Save Changes'}</Text>
+        <Text style={styles.primaryButtonText}>{saving ? t('settings.saving') : t('settings.saveChanges')}</Text>
       </Pressable>
     </View>
   );
@@ -149,9 +159,9 @@ export default function SettingsDetailScreen() {
   const renderNotifications = () => (
     <View style={styles.card}>
       {[
-        ['pushNotifications', 'Push notifications', 'Alerts for live rooms, releases, and account activity'],
-        ['emailNotifications', 'Email updates', 'Important account messages and release summaries'],
-        ['marketingNotifications', 'Recommendations', 'Suggestions based on what you watch'],
+        ['pushNotifications', t('settings.pushNotifications'), t('settings.pushNotificationsDesc')],
+        ['emailNotifications', t('settings.emailUpdates'), t('settings.emailUpdatesDesc')],
+        ['marketingNotifications', t('settings.recommendations'), t('settings.recommendationsDesc')],
       ].map(([key, title, subtitle]) => (
         <View key={key} style={styles.row}>
           <View style={{ flex: 1 }}>
@@ -168,24 +178,24 @@ export default function SettingsDetailScreen() {
     <View style={styles.card}>
       <View style={styles.metricCard}>
         <Text style={styles.metricValue}>{favorites.length}</Text>
-        <Text style={styles.metricLabel}>Saved titles in My List</Text>
+        <Text style={styles.metricLabel}>{t('settings.savedTitles')}</Text>
       </View>
       <View style={styles.metricCard}>
         <Text style={styles.metricValue}>{watchHistory.length}</Text>
-        <Text style={styles.metricLabel}>Recently watched items</Text>
+        <Text style={styles.metricLabel}>{t('settings.recentlyWatched')}</Text>
       </View>
       {[
-        ['downloadOverWifiOnly', 'Wi-Fi only downloads'],
-        ['smartDownloads', 'Smart downloads'],
-        ['autoplayNextEpisode', 'Autoplay next episode'],
+        ['downloadOverWifiOnly', t('settings.wifiOnly')],
+        ['smartDownloads', t('settings.smartDownloads')],
+        ['autoplayNextEpisode', t('settings.autoplayNextEpisode')],
       ].map(([key, title]) => (
         <View key={key} style={styles.row}>
           <Text style={styles.rowTitle}>{title}</Text>
           <Switch value={Boolean(preferences[key as keyof typeof preferences])} onValueChange={(value) => void togglePreference(key as keyof typeof preferences, value)} />
         </View>
       ))}
-      <Pressable style={styles.secondaryButton} onPress={() => showAlert('Storage cleared', 'Temporary download cache and playback residue were cleared.')}>
-        <Text style={styles.secondaryButtonText}>Clear Temporary Storage</Text>
+      <Pressable style={styles.secondaryButton} onPress={() => showAlert(t('settings.storageCleared'), t('settings.storageClearedDesc'))}>
+        <Text style={styles.secondaryButtonText}>{t('settings.clearTempStorage')}</Text>
       </Pressable>
     </View>
   );
@@ -197,7 +207,7 @@ export default function SettingsDetailScreen() {
         const active = preferences[preferenceKey] === option;
         return (
           <Pressable key={option} style={[styles.optionRow, active && styles.optionRowActive]} onPress={() => void selectPreference(preferenceKey, option)}>
-            <Text style={[styles.optionText, active && styles.optionTextActive]}>{option}</Text>
+            <Text style={[styles.optionText, active && styles.optionTextActive]}>{localizePreferenceValue(language, option)}</Text>
             {active ? <MaterialIcons name="check-circle" size={20} color={theme.primary} /> : null}
           </Pressable>
         );
@@ -223,23 +233,23 @@ export default function SettingsDetailScreen() {
       case 'downloads':
         return renderDownloads();
       case 'language':
-        return renderChoiceList('language', 'App Language');
+        return renderChoiceList('language', t('settings.appLanguage'));
       case 'subtitle-preferences':
         return (
           <>
-            {renderChoiceList('subtitleLanguage', 'Subtitle Language')}
-            {renderChoiceList('subtitleSize', 'Subtitle Size')}
+            {renderChoiceList('subtitleLanguage', t('settings.subtitleLanguage'))}
+            {renderChoiceList('subtitleSize', t('settings.subtitleSize'))}
           </>
         );
       case 'video-quality':
         return (
           <>
-            {renderChoiceList('videoQuality', 'Preferred Quality')}
+            {renderChoiceList('videoQuality', t('settings.preferredQuality'))}
             <View style={styles.card}>
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.rowTitle}>Autoplay trailers</Text>
-                  <Text style={styles.rowSubtitle}>Preview titles automatically on supported screens</Text>
+                  <Text style={styles.rowTitle}>{t('settings.autoplayTrailers')}</Text>
+                  <Text style={styles.rowSubtitle}>{t('settings.autoplayTrailersDesc')}</Text>
                 </View>
                 <Switch value={preferences.autoplayTrailers} onValueChange={(value) => void togglePreference('autoplayTrailers', value)} />
               </View>
@@ -247,25 +257,25 @@ export default function SettingsDetailScreen() {
           </>
         );
       case 'help-center':
-        return renderSupportArticle('Streaming Help', [
-          'Use direct links such as mp4, m3u8, or webm for the most reliable playback inside the app player.',
-          'If a provider blocks embedding, switch to another server or use the external-open button from the player.',
-          'Watch Rooms work best when all participants use the same server source during the session.',
+        return renderSupportArticle(t('settings.streamingHelp'), [
+          t('settings.helpP1'),
+          t('settings.helpP2'),
+          t('settings.helpP3'),
         ]);
       case 'privacy-policy':
-        return renderSupportArticle('Privacy Overview', [
-          'The app stores account details, favorites, watch history, and your playback preferences to personalize the experience.',
-          'Live viewer counts are measured from active playback sessions and are used only to show current audience numbers.',
-          'Administrative actions are restricted by your role and the Supabase policies configured for the project.',
+        return renderSupportArticle(t('settings.privacyOverview'), [
+          t('settings.privacyP1'),
+          t('settings.privacyP2'),
+          t('settings.privacyP3'),
         ]);
       case 'terms-of-service':
-        return renderSupportArticle('Service Terms', [
-          'Only stream media you have rights to distribute or access.',
-          'External providers may enforce their own embedding, DRM, or playback restrictions.',
-          'Abusive activity in watch rooms or admin panels may result in restricted access.',
+        return renderSupportArticle(t('settings.serviceTerms'), [
+          t('settings.termsP1'),
+          t('settings.termsP2'),
+          t('settings.termsP3'),
         ]);
       default:
-        return renderSupportArticle('Settings', ['This section is ready to be customized further as your launch requirements grow.']);
+        return renderSupportArticle(pageTitle, []);
     }
   };
 
@@ -290,7 +300,10 @@ export default function SettingsDetailScreen() {
             if (slug === 'edit-profile') return;
             const defaults = await resetPreferences();
             setPreferences(defaults);
-            showAlert('Reset complete', 'Preferences were restored to defaults.');
+            if (language !== 'English') {
+              await setLanguage('English');
+            }
+            showAlert(t('settings.resetComplete'), t('settings.resetDesc'));
           })()}
         >
           <MaterialIcons name={slug === 'edit-profile' ? 'person' : 'restart-alt'} size={22} color="#FFF" />
