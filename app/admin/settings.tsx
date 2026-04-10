@@ -9,7 +9,7 @@ import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
 
 const defaultSettings: { key: string; label: string; icon: string; type: 'text' | 'toggle'; description?: string; placeholder?: string }[] = [
-  { key: 'app_name', label: 'App Name', icon: 'apps', type: 'text', placeholder: 'StreamControl' },
+  { key: 'app_name', label: 'App Name', icon: 'apps', type: 'text', placeholder: 'Ali Control' },
   { key: 'primary_color', label: 'Primary Color', icon: 'palette', type: 'text', placeholder: '#6366F1' },
   { key: 'logo_url', label: 'Logo URL', icon: 'image', type: 'text', placeholder: 'https://...' },
   { key: 'watch_rooms_enabled', label: 'Watch Rooms', icon: 'groups', type: 'toggle', description: 'Allow users to create and join watch rooms' },

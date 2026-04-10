@@ -68,18 +68,34 @@ export default function LoginScreen() {
         contentFit="cover"
       />
       <LinearGradient
-        colors={['rgba(10,10,15,0.3)', 'rgba(10,10,15,0.8)', theme.background]}
+        colors={['rgba(6,12,28,0.2)', 'rgba(9,19,43,0.72)', 'rgba(5,10,22,0.96)', theme.background]}
         style={StyleSheet.absoluteFill}
-        locations={[0, 0.4, 0.7]}
+        locations={[0, 0.32, 0.68, 1]}
+      />
+      <LinearGradient
+        colors={['rgba(34,197,94,0.22)', 'transparent']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.topGlow}
+      />
+      <LinearGradient
+        colors={['rgba(59,130,246,0.24)', 'transparent']}
+        start={{ x: 1, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={styles.sideGlow}
       />
       <SafeAreaView style={{ flex: 1 }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {/* Logo */}
             <Animated.View entering={FadeInDown.duration(500)} style={styles.logoSection}>
-              <MaterialIcons name="play-circle-filled" size={56} color={theme.primary} />
-              <Text style={styles.appName}>StreamControl</Text>
-              <Text style={styles.tagline}>Your Premium Streaming Hub</Text>
+              <View style={styles.logoBadge}>
+                <LinearGradient colors={['#60A5FA', '#22C55E']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.logoBadgeGradient}>
+                  <MaterialIcons name="play-circle-filled" size={54} color="#F8FAFC" />
+                </LinearGradient>
+              </View>
+              <Text style={styles.appName}>Ali Control</Text>
+              <Text style={styles.tagline}>All rights reserved to Ali Dohol</Text>
             </Animated.View>
 
             {/* Form */}
@@ -181,11 +197,54 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
+  topGlow: {
+    position: 'absolute',
+    top: -60,
+    left: -30,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+  },
+  sideGlow: {
+    position: 'absolute',
+    top: 120,
+    right: -40,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+  },
   scrollContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 40 },
   logoSection: { alignItems: 'center', marginBottom: 40, gap: 8 },
-  appName: { fontSize: 32, fontWeight: '800', color: '#FFF', letterSpacing: -1 },
-  tagline: { fontSize: 14, color: theme.textSecondary, fontWeight: '500' },
-  formCard: { backgroundColor: 'rgba(26,26,38,0.9)', borderRadius: 20, padding: 24, borderWidth: 1, borderColor: theme.border },
+  logoBadge: {
+    borderRadius: 999,
+    padding: 2,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    marginBottom: 6,
+    shadowColor: '#22C55E',
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+  },
+  logoBadgeGradient: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appName: { fontSize: 34, fontWeight: '800', color: '#F8FAFC', letterSpacing: -1.1 },
+  tagline: { fontSize: 14, color: '#D7E3F4', fontWeight: '600', textAlign: 'center' },
+  formCard: {
+    backgroundColor: 'rgba(9,15,30,0.84)',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.22)',
+    shadowColor: '#020617',
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+  },
   formTitle: { fontSize: 22, fontWeight: '700', color: '#FFF', marginBottom: 4 },
   formSubtitle: { fontSize: 14, color: theme.textSecondary, marginBottom: 24 },
   inputWrap: {

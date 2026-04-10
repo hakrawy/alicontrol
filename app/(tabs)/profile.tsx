@@ -130,7 +130,7 @@ export default function ProfileScreen() {
             <MaterialIcons name="logout" size={20} color={theme.error} />
             <Text style={styles.signOutText}>Sign Out</Text>
           </Pressable>
-          <Text style={styles.versionText}>StreamControl v2.0.0</Text>
+          <Text style={styles.versionText}>Ali Control v2.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

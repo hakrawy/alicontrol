@@ -1,6 +1,6 @@
 export const config = {
-  appName: 'StreamControl',
-  appTagline: 'Your Premium Streaming Hub',
+  appName: 'Ali Control',
+  appTagline: 'All rights reserved to Ali Dohol',
   version: '1.0.0',
 
   // Content Types

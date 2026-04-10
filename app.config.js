@@ -5,7 +5,7 @@ const baseUrl =
 
 module.exports = {
   expo: {
-    name: 'StreamControl Web',
+    name: 'Ali Control Web',
     slug: 'streamcontrol-web',
     version: '1.0.0',
     orientation: 'portrait',
@@ -26,8 +26,8 @@ module.exports = {
     web: {
       bundler: 'metro',
       output: 'static',
-      name: 'StreamControl Web',
-      shortName: 'StreamControl',
+      name: 'Ali Control Web',
+      shortName: 'Ali Control',
       favicon: './assets/images/logo.png',
     },
     plugins: [

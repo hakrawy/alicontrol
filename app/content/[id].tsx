@@ -115,7 +115,7 @@ export default function ContentDetailScreen() {
   };
 
   const handleShare = async () => {
-    try { await Share.share({ message: `Check out "${content.title}" on StreamControl!` }); } catch {}
+    try { await Share.share({ message: `Check out "${content.title}" on Ali Control!` }); } catch {}
   };
 
   const handlePlayTrailer = () => {

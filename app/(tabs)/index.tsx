@@ -82,7 +82,7 @@ export default function HomeScreen() {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={theme.primary} />
-        <Text style={{ color: theme.textSecondary, marginTop: 16, fontSize: 14 }}>Loading StreamControl...</Text>
+        <Text style={{ color: theme.textSecondary, marginTop: 16, fontSize: 14 }}>Loading Ali Control...</Text>
       </View>
     );
   }
@@ -275,7 +275,7 @@ export default function HomeScreen() {
 
       {/* Floating Header */}
       <View style={[styles.floatingHeader, { paddingTop: insets.top + 8 }]}>
-        <Text style={styles.appTitle}>StreamControl</Text>
+            <Text style={styles.appTitle}>Ali Control</Text>
         <View style={styles.headerIcons}>
           <Pressable style={styles.headerIcon} onPress={() => router.push('/watchroom')}>
             <MaterialIcons name="groups" size={24} color="#FFF" />

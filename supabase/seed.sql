@@ -3,7 +3,7 @@
 
 insert into public.app_settings (key, value)
 values
-  ('app_name', 'StreamControl'),
+  ('app_name', 'Ali Control'),
   ('primary_color', '#6366F1'),
   ('logo_url', ''),
   ('watch_rooms_enabled', 'true'),
