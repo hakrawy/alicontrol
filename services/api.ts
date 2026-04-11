@@ -10,7 +10,31 @@ export interface StreamSource {
   addonId?: string;
   server?: string;
   quality?: string;
+  language?: string;
+  subtitle?: string;
+  status?: 'unknown' | 'working' | 'failing' | 'disabled';
+  lastCheckedAt?: string | null;
+  streamType?: string;
   externalUrl?: string;
+}
+
+export interface PlaybackSourceRecord {
+  id: string;
+  content_type: 'movie' | 'series' | 'episode' | 'channel';
+  content_id: string;
+  addon_or_provider_name: string;
+  server_name: string;
+  quality: string;
+  language: string;
+  subtitle: string;
+  stream_url: string;
+  stream_type: string;
+  status: 'unknown' | 'working' | 'failing' | 'disabled';
+  last_checked_at?: string | null;
+  source_origin: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AddonCatalog {
@@ -106,6 +130,8 @@ export type ViewerContentType = 'movie' | 'series' | 'channel';
 export interface Movie {
   id: string;
   type: 'movie';
+  imdb_id?: string | null;
+  tmdb_id?: string | null;
   title: string;
   description: string;
   poster: string;
@@ -135,6 +161,8 @@ export interface Movie {
 export interface Series {
   id: string;
   type: 'series';
+  imdb_id?: string | null;
+  tmdb_id?: string | null;
   title: string;
   description: string;
   poster: string;
@@ -1246,16 +1274,31 @@ export async function importAddonContent(addonId: string) {
 }
 
 export async function fetchPlaybackSourcesForContent(contentType: 'movie' | 'series' | 'episode', contentId: string) {
-  const { data, error } = await supabase
-    .from('content_external_refs')
-    .select('*, addons!inner(id, name, manifest_url, enabled)')
-    .eq('content_type', contentType)
-    .eq('content_id', contentId)
-    .eq('addons.enabled', true);
-  if (error) throw error;
+  const [manualResult, addonResult] = await Promise.all([
+    supabase
+      .from('playback_sources')
+      .select('*')
+      .eq('content_type', contentType)
+      .eq('content_id', contentId)
+      .neq('status', 'disabled')
+      .order('updated_at', { ascending: false }),
+    supabase
+      .from('content_external_refs')
+      .select('*, addons!inner(id, name, manifest_url, enabled)')
+      .eq('content_type', contentType)
+      .eq('content_id', contentId)
+      .eq('addons.enabled', true),
+  ]);
 
-  const results = await Promise.all(
-    (data || []).map(async (row: any) => {
+  const manualSources = ((manualResult.data || []) as any[]).map(normalizePlaybackSourceRecordToStreamSource);
+
+  if (addonResult.error && !String(addonResult.error.message || '').includes('content_external_refs')) {
+    throw addonResult.error;
+  }
+
+  const addonRows = addonResult.error ? [] : (addonResult.data || []);
+  const addonSourcesNested = await Promise.all(
+    addonRows.map(async (row: any) => {
       const addon = normalizeAddonRecord({
         ...row.addons,
         addon_key: row.addons?.id,
@@ -1276,7 +1319,371 @@ export async function fetchPlaybackSourcesForContent(contentType: 'movie' | 'ser
     })
   );
 
-  return uniqueSources(results.flat());
+  return uniqueSources([...manualSources, ...addonSourcesNested.flat()]);
+}
+
+function normalizePlaybackSourceRecordToStreamSource(row: any): StreamSource {
+  return {
+    label: row?.server_name?.trim() || row?.addon_or_provider_name?.trim() || 'Server 1',
+    url: row?.stream_url?.trim() || '',
+    addon: row?.addon_or_provider_name?.trim() || undefined,
+    server: row?.server_name?.trim() || undefined,
+    quality: row?.quality?.trim() || undefined,
+    language: row?.language?.trim() || undefined,
+    subtitle: row?.subtitle?.trim() || undefined,
+    status: row?.status || 'unknown',
+    lastCheckedAt: row?.last_checked_at || null,
+    streamType: row?.stream_type?.trim() || 'direct',
+    externalUrl: undefined,
+  };
+}
+
+function normalizePlaybackSourceRecord(row: any): PlaybackSourceRecord {
+  return {
+    id: row.id,
+    content_type: row.content_type,
+    content_id: row.content_id,
+    addon_or_provider_name: row.addon_or_provider_name || '',
+    server_name: row.server_name || '',
+    quality: row.quality || 'Auto',
+    language: row.language || '',
+    subtitle: row.subtitle || '',
+    stream_url: row.stream_url || '',
+    stream_type: row.stream_type || 'direct',
+    status: row.status || 'unknown',
+    last_checked_at: row.last_checked_at || null,
+    source_origin: row.source_origin || 'manual',
+    notes: row.notes || '',
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+  };
+}
+
+function buildContentLookupVariants(input: {
+  imdb_id?: string | null;
+  tmdb_id?: string | null;
+  title?: string;
+  year?: number | string | null;
+}) {
+  return {
+    imdbId: input.imdb_id?.trim() || null,
+    tmdbId: input.tmdb_id?.trim() || null,
+    title: input.title?.trim() || '',
+    normalizedTitle: input.title?.trim().toLowerCase() || '',
+    year: Number(input.year) || null,
+  };
+}
+
+async function findExistingContentByIdentity(
+  contentType: 'movie' | 'series',
+  input: { imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | string | null }
+) {
+  const table = contentType === 'movie' ? 'movies' : 'series';
+  const identity = buildContentLookupVariants(input);
+
+  if (identity.imdbId) {
+    const { data } = await supabase.from(table).select('*').eq('imdb_id', identity.imdbId).limit(1).maybeSingle();
+    if (data) return data;
+  }
+
+  if (identity.tmdbId) {
+    const { data } = await supabase.from(table).select('*').eq('tmdb_id', identity.tmdbId).limit(1).maybeSingle();
+    if (data) return data;
+  }
+
+  if (identity.normalizedTitle) {
+    const { data } = await supabase.from(table).select('*').ilike('title', identity.normalizedTitle).limit(10);
+    const match = (data || []).find((row: any) => row?.title?.trim().toLowerCase() === identity.normalizedTitle && (!identity.year || !row?.year || row.year === identity.year));
+    if (match) return match;
+  }
+
+  return null;
+}
+
+export async function fetchPlaybackSourceRecords(contentType: 'movie' | 'series' | 'episode' | 'channel', contentId: string) {
+  const { data, error } = await supabase
+    .from('playback_sources')
+    .select('*')
+    .eq('content_type', contentType)
+    .eq('content_id', contentId)
+    .order('updated_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map((row: any) => normalizePlaybackSourceRecord(row));
+}
+
+export async function deletePlaybackSourceRecord(id: string) {
+  const { error } = await supabase.from('playback_sources').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceRecord>) {
+  const payload = {
+    content_type: source.content_type,
+    content_id: source.content_id,
+    addon_or_provider_name: source.addon_or_provider_name || '',
+    server_name: source.server_name || '',
+    quality: source.quality || 'Auto',
+    language: source.language || '',
+    subtitle: source.subtitle || '',
+    stream_url: source.stream_url || '',
+    stream_type: source.stream_type || 'direct',
+    status: source.status || 'unknown',
+    last_checked_at: source.last_checked_at || null,
+    source_origin: source.source_origin || 'manual',
+    notes: source.notes || '',
+    updated_at: new Date().toISOString(),
+  };
+
+  if (source.id) {
+    const { data, error } = await supabase.from('playback_sources').update(payload).eq('id', source.id).select().single();
+    if (error) throw error;
+    return normalizePlaybackSourceRecord(data);
+  }
+
+  const { data, error } = await supabase.from('playback_sources').upsert(payload, {
+    onConflict: 'content_type,content_id,stream_url',
+  }).select().single();
+  if (error) throw error;
+  return normalizePlaybackSourceRecord(data);
+}
+
+export async function validatePlaybackSourceUrl(streamUrl: string) {
+  if (!isHttpUrl(streamUrl)) {
+    return { status: 'failing' as const, message: 'Invalid URL', checkedAt: new Date().toISOString() };
+  }
+
+  try {
+    const response = await fetch(streamUrl, { method: 'GET', redirect: 'follow' });
+    const checkedAt = new Date().toISOString();
+    if (!response.ok) {
+      return { status: 'failing' as const, message: `HTTP ${response.status}`, checkedAt };
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const text = contentType.includes('mpegurl') || streamUrl.toLowerCase().includes('.m3u8')
+      ? await response.text().catch(() => '')
+      : '';
+    const looksPlayable = !text || text.includes('#EXTM3U') || text.includes('#EXTINF') || contentType.startsWith('video/') || contentType.startsWith('audio/');
+
+    return {
+      status: looksPlayable ? ('working' as const) : ('unknown' as const),
+      message: looksPlayable ? 'Playable' : 'Response did not look like a media manifest',
+      checkedAt,
+    };
+  } catch (error: any) {
+    return {
+      status: 'failing' as const,
+      message: error?.message || 'Request failed',
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export async function validatePlaybackSourceRecord(id: string) {
+  const { data, error } = await supabase.from('playback_sources').select('*').eq('id', id).single();
+  if (error) throw error;
+  const result = await validatePlaybackSourceUrl(data.stream_url);
+  return upsertPlaybackSourceRecord({
+    id,
+    ...data,
+    status: result.status,
+    last_checked_at: result.checkedAt,
+  });
+}
+
+function parseJsonArrayInput(rawInput: string) {
+  const parsed = JSON.parse(rawInput);
+  if (!Array.isArray(parsed)) {
+    throw new Error('JSON payload must be an array of objects.');
+  }
+  return parsed;
+}
+
+function parseCsvObjects(rawInput: string) {
+  const lines = rawInput.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map((item) => item.trim());
+  return lines.slice(1).map((line) => {
+    const values = line.split(',').map((item) => item.trim());
+    return headers.reduce<Record<string, string>>((acc, key, index) => {
+      acc[key] = values[index] || '';
+      return acc;
+    }, {});
+  });
+}
+
+async function fetchStructuredInputFromUrl(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Import request failed with status ${response.status}`);
+  }
+  return response.text();
+}
+
+async function upsertMovieIdentity(payload: Partial<Movie>) {
+  const existing = await findExistingContentByIdentity('movie', payload);
+  const mergedPayload = {
+    ...payload,
+    imdb_id: payload.imdb_id || existing?.imdb_id || null,
+    tmdb_id: payload.tmdb_id || existing?.tmdb_id || null,
+  };
+  return upsertMovie({
+    ...(existing?.id ? { id: existing.id } : {}),
+    ...mergedPayload,
+  } as any);
+}
+
+async function upsertSeriesIdentity(payload: Partial<Series>) {
+  const existing = await findExistingContentByIdentity('series', payload);
+  const mergedPayload = {
+    ...payload,
+    imdb_id: payload.imdb_id || existing?.imdb_id || null,
+    tmdb_id: payload.tmdb_id || existing?.tmdb_id || null,
+  };
+  return upsertSeries({
+    ...(existing?.id ? { id: existing.id } : {}),
+    ...mergedPayload,
+  } as any);
+}
+
+export async function importContentMetadata(contentType: 'movie' | 'series', method: 'json' | 'csv' | 'url', payload: string) {
+  const rawInput = method === 'url' ? await fetchStructuredInputFromUrl(payload.trim()) : payload;
+  const items = method === 'csv' ? parseCsvObjects(rawInput) : parseJsonArrayInput(rawInput);
+  let imported = 0;
+  let merged = 0;
+
+  for (const item of items) {
+    const normalized = {
+      title: item.title || item.name || '',
+      year: Number(item.year) || new Date().getFullYear(),
+      description: item.description || item.overview || '',
+      poster: item.poster || item.poster_url || item.image || '',
+      backdrop: item.backdrop || item.backdrop_url || item.poster || '',
+      genre: Array.isArray(item.genre) ? item.genre : String(item.genre || item.genres || '').split('|').join(',').split(',').map((value: string) => value.trim()).filter(Boolean),
+      imdb_id: item.imdb_id || item.imdb || null,
+      tmdb_id: item.tmdb_id || item.tmdb || null,
+      rating: Number(item.rating || 0) || 0,
+      cast_members: Array.isArray(item.cast_members) ? item.cast_members : String(item.cast_members || item.cast || '').split(',').map((value: string) => value.trim()).filter(Boolean),
+      trailer_url: item.trailer_url || '',
+      is_published: true,
+      is_new: Boolean(item.is_new ?? true),
+      is_featured: Boolean(item.is_featured ?? false),
+      is_trending: Boolean(item.is_trending ?? false),
+      is_exclusive: Boolean(item.is_exclusive ?? false),
+    };
+
+    if (!normalized.title) continue;
+
+    const existing = await findExistingContentByIdentity(contentType, normalized);
+    if (contentType === 'movie') {
+      await upsertMovieIdentity({
+        ...(existing?.id ? { id: existing.id } : {}),
+        title: normalized.title,
+        year: normalized.year,
+        description: normalized.description,
+        poster: normalized.poster,
+        backdrop: normalized.backdrop,
+        genre: normalized.genre,
+        imdb_id: normalized.imdb_id,
+        tmdb_id: normalized.tmdb_id,
+        rating: normalized.rating,
+        cast_members: normalized.cast_members,
+        trailer_url: normalized.trailer_url,
+        duration: item.duration || '',
+        quality: ['Auto'],
+        stream_url: existing?.stream_url || '',
+        stream_sources: existing?.stream_sources || [],
+        subtitle_url: item.subtitle_url || '',
+        is_published: normalized.is_published,
+        is_new: normalized.is_new,
+        is_featured: normalized.is_featured,
+        is_trending: normalized.is_trending,
+        is_exclusive: normalized.is_exclusive,
+      });
+    } else {
+      await upsertSeriesIdentity({
+        ...(existing?.id ? { id: existing.id } : {}),
+        title: normalized.title,
+        year: normalized.year,
+        description: normalized.description,
+        poster: normalized.poster,
+        backdrop: normalized.backdrop,
+        genre: normalized.genre,
+        imdb_id: normalized.imdb_id,
+        tmdb_id: normalized.tmdb_id,
+        rating: normalized.rating,
+        cast_members: normalized.cast_members,
+        trailer_url: normalized.trailer_url,
+        total_seasons: Number(item.total_seasons || existing?.total_seasons || 0),
+        total_episodes: Number(item.total_episodes || existing?.total_episodes || 0),
+        is_published: normalized.is_published,
+        is_new: normalized.is_new,
+        is_featured: normalized.is_featured,
+        is_trending: normalized.is_trending,
+        is_exclusive: normalized.is_exclusive,
+      });
+    }
+    if (existing?.id) merged += 1;
+    else imported += 1;
+  }
+
+  return { total: items.length, imported, merged };
+}
+
+export async function importPlaybackSources(contentType: 'movie' | 'series' | 'episode' | 'channel', method: 'json' | 'csv' | 'url', payload: string) {
+  const rawInput = method === 'url' ? await fetchStructuredInputFromUrl(payload.trim()) : payload;
+  const items = method === 'csv' ? parseCsvObjects(rawInput) : parseJsonArrayInput(rawInput);
+  let imported = 0;
+  let merged = 0;
+  let failed = 0;
+
+  for (const item of items) {
+    const match = await findExistingContentByIdentity(
+      contentType === 'movie' ? 'movie' : 'series',
+      {
+        imdb_id: item.imdb_id || item.imdb || null,
+        tmdb_id: item.tmdb_id || item.tmdb || null,
+        title: item.title || item.name || '',
+        year: item.year || null,
+      }
+    );
+
+    if (!match?.id) {
+      failed += 1;
+      continue;
+    }
+
+    const validation = await validatePlaybackSourceUrl(String(item.stream_url || item.url || '').trim());
+    const existing = await supabase
+      .from('playback_sources')
+      .select('id')
+      .eq('content_type', contentType)
+      .eq('content_id', match.id)
+      .eq('stream_url', String(item.stream_url || item.url || '').trim())
+      .maybeSingle();
+
+    await upsertPlaybackSourceRecord({
+      id: existing.data?.id,
+      content_type: contentType,
+      content_id: match.id,
+      addon_or_provider_name: item.addon_or_provider_name || item.provider || item.addon || 'Imported',
+      server_name: item.server_name || item.server || 'Server 1',
+      quality: item.quality || 'Auto',
+      language: item.language || '',
+      subtitle: item.subtitle || item.subtitle_url || '',
+      stream_url: String(item.stream_url || item.url || '').trim(),
+      stream_type: item.stream_type || 'direct',
+      status: validation.status,
+      last_checked_at: validation.checkedAt,
+      source_origin: method,
+      notes: item.notes || '',
+    });
+
+    if (existing.data?.id) merged += 1;
+    else imported += 1;
+  }
+
+  return { total: items.length, imported, merged, failed };
 }
 
 export function getPrimaryStreamUrl(value: { stream_url?: string; stream_sources?: StreamSource[] }) {

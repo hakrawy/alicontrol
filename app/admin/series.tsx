@@ -14,7 +14,7 @@ import { useLocale } from '../../contexts/LocaleContext';
 type ViewMode = 'list' | 'form' | 'seasons';
 
 const emptySeriesForm = {
-  title: '', description: '', poster: '', backdrop: '', trailer_url: '', genre: '', year: '', rating: '', cast_members: '',
+  title: '', description: '', poster: '', backdrop: '', trailer_url: '', genre: '', year: '', rating: '', cast_members: '', imdb_id: '', tmdb_id: '',
   is_featured: false, is_trending: false, is_new: false, is_exclusive: false, is_published: true,
 };
 
@@ -89,7 +89,7 @@ export default function AdminSeries() {
     setForm({
       title: s.title, description: s.description || '', poster: s.poster || '', backdrop: s.backdrop || '',
       trailer_url: s.trailer_url || '', genre: (s.genre || []).join(', '), year: String(s.year || ''),
-      rating: String(s.rating || ''), cast_members: (s.cast_members || []).join(', '),
+      rating: String(s.rating || ''), cast_members: (s.cast_members || []).join(', '), imdb_id: s.imdb_id || '', tmdb_id: s.tmdb_id || '',
       is_featured: s.is_featured, is_trending: s.is_trending, is_new: s.is_new,
       is_exclusive: s.is_exclusive, is_published: s.is_published,
     });
@@ -105,7 +105,7 @@ export default function AdminSeries() {
         title: form.title, description: form.description, poster: form.poster, backdrop: form.backdrop,
         trailer_url: form.trailer_url, genre: form.genre.split(',').map(g => g.trim()).filter(Boolean),
         year: parseInt(form.year) || new Date().getFullYear(), rating: parseFloat(form.rating) || 0,
-        cast_members: form.cast_members.split(',').map(c => c.trim()).filter(Boolean),
+        cast_members: form.cast_members.split(',').map(c => c.trim()).filter(Boolean), imdb_id: form.imdb_id || null, tmdb_id: form.tmdb_id || null,
         is_featured: form.is_featured, is_trending: form.is_trending, is_new: form.is_new,
         is_exclusive: form.is_exclusive, is_published: form.is_published,
       } as any);
@@ -401,6 +401,8 @@ export default function AdminSeries() {
       { key: 'genre', label: 'GENRES', placeholder: 'Action, Drama' },
       { key: 'year', label: 'YEAR' },
       { key: 'rating', label: 'RATING' },
+      { key: 'imdb_id', label: 'IMDB ID', placeholder: 'tt1234567' },
+      { key: 'tmdb_id', label: 'TMDB ID', placeholder: '1399' },
       { key: 'cast_members', label: 'CAST', placeholder: 'Actor 1, Actor 2' },
     ];
 

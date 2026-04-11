@@ -13,7 +13,7 @@ import { useLocale } from '../../contexts/LocaleContext';
 
 const emptyForm = {
   title: '', description: '', poster: '', backdrop: '', stream_url: '', trailer_url: '', subtitle_url: '',
-  genre: '', year: '', duration: '', rating: '', cast_members: '', quality: '',
+  genre: '', year: '', duration: '', rating: '', cast_members: '', quality: '', imdb_id: '', tmdb_id: '',
   is_featured: false, is_trending: false, is_new: false, is_exclusive: false, is_published: true,
 };
 
@@ -85,7 +85,7 @@ export default function AdminMovies() {
       stream_url: api.formatStreamSourcesInput(movie.stream_sources || movie.stream_url || ''), trailer_url: movie.trailer_url || '', subtitle_url: movie.subtitle_url || '',
       genre: (movie.genre || []).join(', '), year: String(movie.year || ''),
       duration: movie.duration || '', rating: String(movie.rating || ''), cast_members: (movie.cast_members || []).join(', '),
-      quality: (movie.quality || []).join(', '),
+      quality: (movie.quality || []).join(', '), imdb_id: movie.imdb_id || '', tmdb_id: movie.tmdb_id || '',
       is_featured: movie.is_featured, is_trending: movie.is_trending, is_new: movie.is_new,
       is_exclusive: movie.is_exclusive, is_published: movie.is_published,
     });
@@ -103,7 +103,7 @@ export default function AdminMovies() {
         genre: form.genre.split(',').map(g => g.trim()).filter(Boolean),
         year: parseInt(form.year) || new Date().getFullYear(), duration: form.duration, rating: parseFloat(form.rating) || 0,
         cast_members: form.cast_members.split(',').map(c => c.trim()).filter(Boolean),
-        quality: form.quality.split(',').map(q => q.trim()).filter(Boolean),
+        quality: form.quality.split(',').map(q => q.trim()).filter(Boolean), imdb_id: form.imdb_id || null, tmdb_id: form.tmdb_id || null,
         is_featured: form.is_featured, is_trending: form.is_trending, is_new: form.is_new,
         is_exclusive: form.is_exclusive, is_published: form.is_published,
       } as any);
@@ -185,6 +185,8 @@ export default function AdminMovies() {
     { key: 'year', label: 'YEAR', placeholder: '2026' },
     { key: 'duration', label: 'DURATION', placeholder: '2h 15m' },
     { key: 'rating', label: 'RATING', placeholder: '8.5' },
+    { key: 'imdb_id', label: 'IMDB ID', placeholder: 'tt1234567' },
+    { key: 'tmdb_id', label: 'TMDB ID', placeholder: '603692' },
     { key: 'cast_members', label: 'CAST', placeholder: 'Actor 1, Actor 2' },
     { key: 'quality', label: 'QUALITY OPTIONS', placeholder: '4K, 1080p, 720p' },
   ];

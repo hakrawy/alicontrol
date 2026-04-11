@@ -3,6 +3,8 @@ export type AppLanguage = 'English' | 'Arabic';
 type TranslationKey =
   | 'tabs.home'
   | 'tabs.search'
+  | 'tabs.movies'
+  | 'tabs.series'
   | 'tabs.live'
   | 'tabs.watchlist'
   | 'tabs.profile'
@@ -88,6 +90,8 @@ type TranslationKey =
 const en: Record<TranslationKey, string> = {
   'tabs.home': 'Home',
   'tabs.search': 'Search',
+  'tabs.movies': 'Movies',
+  'tabs.series': 'Series',
   'tabs.live': 'Live TV',
   'tabs.watchlist': 'My List',
   'tabs.profile': 'Profile',
@@ -174,6 +178,8 @@ const en: Record<TranslationKey, string> = {
 const ar: Record<TranslationKey, string> = {
   'tabs.home': 'الرئيسية',
   'tabs.search': 'البحث',
+  'tabs.movies': 'الأفلام',
+  'tabs.series': 'المسلسلات',
   'tabs.live': 'البث المباشر',
   'tabs.watchlist': 'قائمتي',
   'tabs.profile': 'الملف الشخصي',
