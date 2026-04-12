@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../constants/theme';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
+import { useAppContext } from '../contexts/AppContext';
 
 type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
 type PlayerSource = api.StreamSource;
@@ -268,6 +269,8 @@ function WebDirectPlayer({
   onPlaybackFailure,
   mediaKind,
   subtitleUrl,
+  initialResumeTime = 0,
+  onProgress,
 }: {
   url: string;
   title: string;
@@ -277,6 +280,8 @@ function WebDirectPlayer({
   onPlaybackFailure: (reason?: string) => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
+  initialResumeTime?: number;
+  onProgress?: (currentTime: number, duration: number) => void;
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -290,9 +295,11 @@ function WebDirectPlayer({
   const [showSourcesPanel, setShowSourcesPanel] = useState(false);
   const [playbackError, setPlaybackError] = useState('');
   const [captionsEnabled, setCaptionsEnabled] = useState(Boolean(subtitleUrl));
+  const [progressTrackWidth, setProgressTrackWidth] = useState(0);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const activeSource = sources[selectedSourceIndex];
+  const didApplyResumeRef = useRef(false);
 
   const scheduleControlsHide = useCallback((delay = 2500) => {
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
@@ -351,12 +358,21 @@ function WebDirectPlayer({
     }
 
     const syncState = () => {
-      setCurrentTime(video.currentTime || 0);
-      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
+      const nextCurrentTime = video.currentTime || 0;
+      const nextDuration = Number.isFinite(video.duration) ? video.duration : 0;
+      setCurrentTime(nextCurrentTime);
+      setDuration(nextDuration);
       setIsPlaying(!video.paused);
+      onProgress?.(nextCurrentTime, nextDuration);
     };
 
-    const onLoadedMetadata = () => syncState();
+    const onLoadedMetadata = () => {
+      if (!didApplyResumeRef.current && initialResumeTime > 5 && Number.isFinite(video.duration)) {
+        video.currentTime = Math.min(initialResumeTime, Math.max((video.duration || 0) - 3, 0));
+        didApplyResumeRef.current = true;
+      }
+      syncState();
+    };
     const onCanPlay = () => {
       setIsBuffering(false);
       scheduleControlsHide(2200);
@@ -419,7 +435,7 @@ function WebDirectPlayer({
         video.load();
       }
     };
-  }, [url, playbackSpeed, activeSource?.headers, onPlaybackFailure, scheduleControlsHide]);
+  }, [url, playbackSpeed, activeSource?.headers, onPlaybackFailure, scheduleControlsHide, initialResumeTime, onProgress]);
 
   useEffect(() => {
     if (!showControls) return;
@@ -466,6 +482,16 @@ function WebDirectPlayer({
     if (!video || !Number.isFinite(video.duration)) return;
     video.currentTime = Math.max(0, Math.min(video.currentTime + seconds, video.duration));
   }, []);
+
+  const seekToRatio = useCallback((ratio: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    const nextTime = Math.max(0, Math.min((video.duration || 0) * ratio, video.duration || 0));
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+    onProgress?.(nextTime, video.duration || 0);
+    showControlsTemporarily(1800);
+  }, [onProgress, showControlsTemporarily]);
 
   const changeSpeed = useCallback((speed: number) => {
     Haptics.selectionAsync();
@@ -580,10 +606,18 @@ function WebDirectPlayer({
             {!isLiveStream ? (
               <>
                 <View style={styles.progressContainer}>
-                  <View style={styles.progressTrack}>
+                  <Pressable
+                    style={styles.progressTrack}
+                    onLayout={(event) => setProgressTrackWidth(event.nativeEvent.layout.width)}
+                    onPress={(event) => {
+                      if (!progressTrackWidth) return;
+                      const ratio = event.nativeEvent.locationX / progressTrackWidth;
+                      seekToRatio(ratio);
+                    }}
+                  >
                     <View style={[styles.progressFill, { width: `${progress}%` }]} />
                     <View style={[styles.progressThumb, { left: `${progress}%` }]} />
-                  </View>
+                  </Pressable>
                 </View>
                 <View style={styles.timeRow}>
                   <Text style={styles.timeText}>{formatPlaybackTime(currentTime)}</Text>
