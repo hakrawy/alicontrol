@@ -123,6 +123,14 @@ export interface AddonImportSummary {
   errors: string[];
 }
 
+export interface AddonRepairSummary {
+  addonName: string;
+  repairedSeries: number;
+  repairedEpisodes: number;
+  skipped: number;
+  errors: string[];
+}
+
 interface AddonExternalRef {
   id: string;
   addon_id: string;
@@ -1533,6 +1541,53 @@ async function ensureSeriesEpisode(addon: AddonRecord, seriesId: string, externa
     year: null,
     meta_json: video,
   });
+}
+
+export async function repairAddonSeriesEpisodes(addonId: string) {
+  const { data, error } = await supabase.from('addons').select('*').eq('id', addonId).single();
+  if (error) throw error;
+
+  const addon = normalizeAddonRecord(data);
+  const summary: AddonRepairSummary = {
+    addonName: addon.name,
+    repairedSeries: 0,
+    repairedEpisodes: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  const { data: refs, error: refsError } = await supabase
+    .from('content_external_refs')
+    .select('*')
+    .eq('addon_id', addon.id)
+    .eq('content_type', 'series');
+
+  if (refsError) throw refsError;
+
+  for (const ref of (refs || []) as AddonExternalRef[]) {
+    try {
+      const fullMeta = await fetchAddonMeta(addon, ref.external_type, ref.external_id);
+      if (!Array.isArray(fullMeta?.videos) || fullMeta.videos.length === 0) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      for (const [videoIndex, video] of fullMeta.videos.entries()) {
+        await ensureSeriesEpisode(addon, ref.content_id, ref.external_type, video, videoIndex);
+        summary.repairedEpisodes += 1;
+      }
+
+      await updateSeriesCounts(ref.content_id);
+      summary.repairedSeries += 1;
+    } catch (repairError: any) {
+      summary.skipped += 1;
+      if (summary.errors.length < 10) {
+        summary.errors.push(`${ref.title || ref.external_id}: ${repairError?.message || 'Repair failed'}`);
+      }
+    }
+  }
+
+  return summary;
 }
 
 export async function importAddonContent(addonId: string) {

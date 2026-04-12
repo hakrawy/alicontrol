@@ -22,6 +22,7 @@ export default function AdminAddons() {
   const [settingsAddon, setSettingsAddon] = useState<api.AddonRecord | null>(null);
   const [configDraft, setConfigDraft] = useState<Record<string, any>>({});
   const [rawConfigJson, setRawConfigJson] = useState('{}');
+  const repairSeriesLabel = language === 'Arabic' ? 'إصلاح المسلسلات' : 'Repair Series';
 
   const copy = useMemo(() => language === 'Arabic' ? {
     title: 'إدارة الإضافات',
@@ -353,6 +354,24 @@ export default function AdminAddons() {
                         <MaterialIcons name="play-circle-outline" size={18} color={theme.textMuted} />
                       </View>
                     )}
+                    {kind !== 'stream' ? (
+                      <Pressable
+                        style={styles.iconBtn}
+                        onPress={async () => {
+                          try {
+                            const result = await api.repairAddonSeriesEpisodes(addon.id);
+                            showAlert(
+                              repairSeriesLabel,
+                              `${result.addonName}\nSeries repaired: ${result.repairedSeries}\nEpisodes repaired: ${result.repairedEpisodes}\nSkipped: ${result.skipped}${result.errors.length ? `\n\n${result.errors.join('\n')}` : ''}`
+                            );
+                          } catch (error: any) {
+                            showAlert(repairSeriesLabel, error?.message || 'Could not repair imported series.');
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="auto-fix-high" size={18} color={theme.warning} />
+                      </Pressable>
+                    ) : null}
                     <Pressable
                       style={styles.iconBtn}
                       onPress={async () => {

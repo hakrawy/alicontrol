@@ -226,8 +226,9 @@ function SourceSelector({
   return (
     <View style={styles.sourcesSheet}>
       <View style={styles.sourcesSheetHeader}>
+        <Text style={styles.sourcesSheetEyebrow}>PLAYBACK SOURCES</Text>
         <Text style={styles.sourcesSheetTitle}>Servers</Text>
-        <Text style={styles.sourcesSheetSubtitle}>Switch instantly if one source is slow or blocked.</Text>
+        <Text style={styles.sourcesSheetSubtitle}>Switch instantly if one source is slow, blocked, or lower quality than expected.</Text>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sourcesRow}>
         {sources.map((source, index) => (
@@ -1108,20 +1109,21 @@ const styles = StyleSheet.create({
   controlsOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.34)', justifyContent: 'space-between' },
   embeddedOverlay: { backgroundColor: 'transparent' },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, gap: 12 },
-  backButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  backButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
   titleWrap: { flex: 1 },
-  titleText: { fontSize: 16, fontWeight: '600', color: '#FFF' },
+  titleText: { fontSize: 17, fontWeight: '800', color: '#FFF' },
   sourceStatusText: { fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
-  topBarBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  topBarBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
   topBarBtnActive: { backgroundColor: 'rgba(99,102,241,0.9)' },
   speedText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-  sourcesSheet: { backgroundColor: 'rgba(10,13,22,0.92)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', padding: 14, gap: 12 },
+  sourcesSheet: { backgroundColor: 'rgba(9,13,24,0.96)', borderRadius: 22, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', padding: 16, gap: 12 },
   sourcesSheetHeader: { gap: 4 },
+  sourcesSheetEyebrow: { fontSize: 11, fontWeight: '800', color: '#A5B4FC', letterSpacing: 1.2 },
   sourcesSheetTitle: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   sourcesSheetSubtitle: { fontSize: 12, color: 'rgba(255,255,255,0.64)' },
   sourcesRow: { gap: 8, paddingRight: 16 },
-  sourceChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
-  sourceChipActive: { backgroundColor: 'rgba(255,255,255,0.95)', borderColor: 'rgba(255,255,255,0.95)' },
+  sourceChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  sourceChipActive: { backgroundColor: '#FFF', borderColor: '#FFF' },
   sourceChipText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   sourceChipTextActive: { color: '#000' },
   sourceChipMeta: { fontSize: 10, color: 'rgba(255,255,255,0.68)', marginTop: 2 },
@@ -1132,9 +1134,9 @@ const styles = StyleSheet.create({
   speedOptionText: { fontSize: 14, fontWeight: '600', color: theme.textSecondary },
   speedOptionTextActive: { color: '#FFF' },
   centerControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 48 },
-  seekBtn: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
+  seekBtn: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)' },
   disabledControl: { opacity: 0.4 },
-  playPauseBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  playPauseBtn: { width: 78, height: 78, borderRadius: 39, backgroundColor: 'rgba(255,255,255,0.2)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
   bottomBar: { paddingHorizontal: 16, paddingBottom: 16, gap: 10 },
   progressContainer: { marginBottom: 8 },
   progressTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2, overflow: 'visible' },
