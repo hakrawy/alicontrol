@@ -9,12 +9,13 @@ import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import Hls, { Events } from 'hls.js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../constants/theme';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
 
-type MediaKind = 'direct' | 'youtube' | 'web';
-type PlayerSource = { label: string; url: string; addon?: string; server?: string; quality?: string };
+type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
+type PlayerSource = api.StreamSource;
 
 function getYouTubeVideoId(rawUrl: string): string | null {
   try {
@@ -73,6 +74,9 @@ function getMediaKind(rawUrl: string): MediaKind {
   try {
     const parsed = new URL(rawUrl);
     const pathname = parsed.pathname.toLowerCase();
+    if (/\.(mpd)(\?.*)?$/.test(pathname)) {
+      return 'dash';
+    }
     if (/\.(mp4|m3u8|webm|mov|m4v|mpd)(\?.*)?$/.test(pathname) || pathname.endsWith('.m3u8')) {
       return 'direct';
     }
@@ -86,6 +90,14 @@ function getMediaKind(rawUrl: string): MediaKind {
 function isHlsUrl(rawUrl: string) {
   try {
     return new URL(rawUrl).pathname.toLowerCase().includes('.m3u8');
+  } catch {
+    return false;
+  }
+}
+
+function isDashUrl(rawUrl: string) {
+  try {
+    return new URL(rawUrl).pathname.toLowerCase().includes('.mpd');
   } catch {
     return false;
   }
@@ -139,8 +151,21 @@ function parseSourcesParam(rawSources?: string | string[], rawUrl?: string | str
             label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : `Server ${index + 1}`,
             url: item.url.trim(),
             addon: typeof item.addon === 'string' ? item.addon.trim() : undefined,
+            addonId: typeof item.addonId === 'string' ? item.addonId.trim() : undefined,
             server: typeof item.server === 'string' ? item.server.trim() : undefined,
             quality: typeof item.quality === 'string' ? item.quality.trim() : undefined,
+            language: typeof item.language === 'string' ? item.language.trim() : undefined,
+            subtitle: typeof item.subtitle === 'string' ? item.subtitle.trim() : undefined,
+            status: typeof item.status === 'string' ? item.status : undefined,
+            lastCheckedAt: typeof item.lastCheckedAt === 'string' ? item.lastCheckedAt : undefined,
+            streamType: typeof item.streamType === 'string' ? item.streamType : undefined,
+            externalUrl: typeof item.externalUrl === 'string' ? item.externalUrl.trim() : undefined,
+            headers: item.headers && typeof item.headers === 'object' ? item.headers : undefined,
+            behaviorHints: item.behaviorHints && typeof item.behaviorHints === 'object' ? item.behaviorHints : null,
+            proxyRequired: Boolean(item.proxyRequired),
+            isWorking: typeof item.isWorking === 'boolean' ? item.isWorking : undefined,
+            responseTimeMs: Number.isFinite(item.responseTimeMs) ? item.responseTimeMs : undefined,
+            priority: Number.isFinite(item.priority) ? item.priority : undefined,
           }))
           .filter((item) => item.url);
 
@@ -155,8 +180,34 @@ function parseSourcesParam(rawSources?: string | string[], rawUrl?: string | str
   return [{ label: 'Server 1', url: fallbackUrl }];
 }
 
+function rankQuality(quality?: string) {
+  const value = String(quality || '').toLowerCase();
+  if (value.includes('4k') || value.includes('2160')) return 6;
+  if (value.includes('1440')) return 5;
+  if (value.includes('1080')) return 4;
+  if (value.includes('720')) return 3;
+  if (value.includes('480')) return 2;
+  if (value.includes('360')) return 1;
+  return 0;
+}
+
+function sortSources(sources: PlayerSource[]) {
+  return [...sources].sort((a, b) => {
+    const statusRank = (source: PlayerSource) => source.status === 'working' || source.isWorking ? 3 : source.status === 'unknown' ? 2 : source.status === 'failing' ? 1 : 0;
+    const responseA = Number.isFinite(a.responseTimeMs as number) ? (a.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
+    const responseB = Number.isFinite(b.responseTimeMs as number) ? (b.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
+    return (
+      ((b.priority ?? 0) - (a.priority ?? 0)) ||
+      (statusRank(b) - statusRank(a)) ||
+      (rankQuality(b.quality) - rankQuality(a.quality)) ||
+      (responseA - responseB)
+    );
+  });
+}
+
 function getMediaKindLabel(kind: MediaKind) {
   if (kind === 'direct') return 'Direct';
+  if (kind === 'dash') return 'DASH';
   if (kind === 'youtube') return 'YouTube';
   return 'Embedded';
 }
@@ -213,6 +264,7 @@ function WebDirectPlayer({
   sources,
   selectedSourceIndex,
   onSelectSource,
+  onPlaybackFailure,
   mediaKind,
   subtitleUrl,
 }: {
@@ -221,6 +273,7 @@ function WebDirectPlayer({
   sources: PlayerSource[];
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
+  onPlaybackFailure: (reason?: string) => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
 }) {
@@ -237,6 +290,7 @@ function WebDirectPlayer({
   const [captionsEnabled, setCaptionsEnabled] = useState(Boolean(subtitleUrl));
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const activeSource = sources[selectedSourceIndex];
 
   useEffect(() => {
     setCaptionsEnabled(Boolean(subtitleUrl));
@@ -253,12 +307,21 @@ function WebDirectPlayer({
     video.playbackRate = playbackSpeed;
 
     if (isHlsUrl(url) && Hls.isSupported()) {
-      hls = new Hls();
+      hls = new Hls({
+        xhrSetup: (xhr) => {
+          if (activeSource?.headers) {
+            Object.entries(activeSource.headers).forEach(([key, value]) => {
+              xhr.setRequestHeader(key, value);
+            });
+          }
+        },
+      });
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Events.ERROR, (_event, data) => {
         if (data?.fatal) {
           setPlaybackError('This HLS stream failed to load in the browser.');
+          onPlaybackFailure('fatal_hls_error');
         }
       });
     } else {
@@ -275,7 +338,10 @@ function WebDirectPlayer({
     const onTimeUpdate = () => syncState();
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onError = () => setPlaybackError('The browser could not play this source.');
+    const onError = () => {
+      setPlaybackError('The browser could not play this source.');
+      onPlaybackFailure('html5_error');
+    };
 
     video.addEventListener('loadedmetadata', onLoadedMetadata);
     video.addEventListener('timeupdate', onTimeUpdate);
@@ -363,6 +429,7 @@ function WebDirectPlayer({
           controls={false}
           autoPlay
           muted={false}
+          preload="auto"
         >
           {subtitleUrl ? (
             <track
@@ -428,6 +495,9 @@ function WebDirectPlayer({
               <SourceSelector sources={sources} activeIndex={selectedSourceIndex} onSelect={(index) => { onSelectSource(index); setShowSourcesPanel(false); }} />
             ) : null}
             {playbackError ? <Text style={styles.errorText}>{playbackError}</Text> : null}
+            {activeSource?.proxyRequired ? (
+              <Text style={styles.helperText}>This source may require proxy or custom headers for browser playback.</Text>
+            ) : null}
             {subtitleUrl ? (
               <Text style={styles.helperText}>
                 {captionsEnabled ? 'Subtitles are enabled for this source.' : 'Subtitles available. Tap CC to show them.'}
@@ -465,6 +535,7 @@ function NativeDirectVideoPlayer({
   sources,
   selectedSourceIndex,
   onSelectSource,
+  onPlaybackFailure: _onPlaybackFailure,
   mediaKind,
   subtitleUrl,
 }: {
@@ -473,6 +544,7 @@ function NativeDirectVideoPlayer({
   sources: PlayerSource[];
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
+  onPlaybackFailure: (reason?: string) => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
 }) {
@@ -626,6 +698,7 @@ function DirectVideoPlayer(props: {
   sources: PlayerSource[];
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
+  onPlaybackFailure: (reason?: string) => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
 }) {
@@ -634,6 +707,93 @@ function DirectVideoPlayer(props: {
   }
 
   return <NativeDirectVideoPlayer {...props} />;
+}
+
+function buildDashPlayerHtml(url: string) {
+  return `<!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <style>
+        html, body, #video { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; }
+        video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+      </style>
+      <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    </head>
+    <body>
+      <video id="video" controls autoplay playsinline></video>
+      <script>
+        const player = dashjs.MediaPlayer().create();
+        player.initialize(document.querySelector('#video'), ${JSON.stringify(url)}, true);
+      </script>
+    </body>
+  </html>`;
+}
+
+function DashPlayer({
+  url,
+  title,
+  sources,
+  selectedSourceIndex,
+  onSelectSource,
+}: {
+  url: string;
+  title: string;
+  sources: PlayerSource[];
+  selectedSourceIndex: number;
+  onSelectSource: (index: number) => void;
+}) {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [showSourcesPanel, setShowSourcesPanel] = useState(false);
+  const dashHtml = buildDashPlayerHtml(url);
+
+  return (
+    <View style={styles.container}>
+      <StatusBar hidden />
+      <View style={styles.videoContainer}>
+        {Platform.OS === 'web' ? (
+          <iframe
+            srcDoc={dashHtml}
+            style={styles.webFrame as any}
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+          />
+        ) : (
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: dashHtml }}
+            style={styles.video}
+            javaScriptEnabled
+            allowsFullscreenVideo
+            mediaPlaybackRequiresUserAction={false}
+          />
+        )}
+      </View>
+      <Animated.View entering={FadeIn.duration(200)} style={[styles.controlsOverlay, styles.embeddedOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={styles.topBar}>
+          <Pressable style={styles.backButton} onPress={() => router.back()}>
+            <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+          </Pressable>
+          <View style={styles.titleWrap}>
+            <Text style={styles.titleText} numberOfLines={1}>{title || 'Now Playing'}</Text>
+            <Text style={styles.sourceStatusText}>DASH player</Text>
+          </View>
+          {sources.length > 1 ? (
+            <Pressable style={[styles.topBarBtn, showSourcesPanel && styles.topBarBtnActive]} onPress={() => setShowSourcesPanel((prev) => !prev)}>
+              <MaterialIcons name="dns" size={20} color="#FFF" />
+            </Pressable>
+          ) : null}
+        </View>
+        {showSourcesPanel ? (
+          <View style={styles.embedBottomSheet}>
+            <SourceSelector sources={sources} activeIndex={selectedSourceIndex} onSelect={(index) => { onSelectSource(index); setShowSourcesPanel(false); }} />
+          </View>
+        ) : null}
+      </Animated.View>
+    </View>
+  );
 }
 
 function EmbeddedPlayer({
@@ -725,15 +885,84 @@ export default function PlayerScreen() {
     viewerContentId?: string;
     viewerContentType?: api.ViewerContentType;
   }>();
-  const availableSources = parseSourcesParam(sources, url);
+  const availableSources = sortSources(parseSourcesParam(sources, url));
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
+  const [autoFallbackReason, setAutoFallbackReason] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const activeSource = availableSources[selectedSourceIndex] || availableSources[0];
   const resolvedUrl = activeSource?.url || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
   const safeTitle = title || 'Now Playing';
+  const preferenceKey = `player-preference:${viewerContentType || 'unknown'}:${viewerContentId || safeTitle}`;
+
+  const rememberSourcePreference = useCallback(async (source?: PlayerSource | null) => {
+    if (!source) return;
+    try {
+      await AsyncStorage.setItem(
+        preferenceKey,
+        JSON.stringify({
+          addon: source.addon || '',
+          server: source.server || source.label || '',
+          quality: source.quality || '',
+          url: source.url,
+        })
+      );
+    } catch {
+      // Ignore local preference persistence issues.
+    }
+  }, [preferenceKey]);
+
+  const moveToBestAlternative = useCallback((reason?: string) => {
+    if (availableSources.length <= 1) return false;
+
+    const nextIndex = availableSources.findIndex((source, index) => index !== selectedSourceIndex && source.url !== activeSource?.url);
+    if (nextIndex === -1) return false;
+
+    setAutoFallbackReason(reason || 'Switched to the next available source automatically.');
+    setSelectedSourceIndex(nextIndex);
+    setRetryToken((value) => value + 1);
+    void rememberSourcePreference(availableSources[nextIndex]);
+    return true;
+  }, [activeSource?.url, availableSources, rememberSourcePreference, selectedSourceIndex]);
 
   useEffect(() => {
-    setSelectedSourceIndex(0);
-  }, [sources, url]);
+    let cancelled = false;
+
+    const restorePreference = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(preferenceKey);
+        if (!raw || cancelled) {
+          setSelectedSourceIndex(0);
+          return;
+        }
+
+        const parsed = JSON.parse(raw);
+        const preferredIndex = availableSources.findIndex((source) =>
+          source.url === parsed?.url ||
+          (
+            (source.addon || '') === (parsed?.addon || '') &&
+            (source.server || source.label || '') === (parsed?.server || '') &&
+            (source.quality || '') === (parsed?.quality || '')
+          )
+        );
+
+        setSelectedSourceIndex(preferredIndex >= 0 ? preferredIndex : 0);
+      } catch {
+        setSelectedSourceIndex(0);
+      }
+    };
+
+    void restorePreference();
+    setAutoFallbackReason(null);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [preferenceKey, sources, url]);
+
+  useEffect(() => {
+    if (!activeSource) return;
+    void rememberSourcePreference(activeSource);
+  }, [activeSource, rememberSourcePreference]);
 
   useEffect(() => {
     if (!viewerContentId || !viewerContentType) return;
@@ -770,6 +999,12 @@ export default function PlayerScreen() {
     };
   }, [viewerContentId, viewerContentType, user?.id]);
 
+  useEffect(() => {
+    if (!autoFallbackReason) return;
+    const timer = setTimeout(() => setAutoFallbackReason(null), 3000);
+    return () => clearTimeout(timer);
+  }, [autoFallbackReason]);
+
   if (!isHttpUrl(resolvedUrl)) {
     return (
       <View style={styles.unsupportedContainer}>
@@ -805,23 +1040,63 @@ export default function PlayerScreen() {
         title={safeTitle}
         sources={availableSources}
         selectedSourceIndex={selectedSourceIndex}
-        onSelectSource={setSelectedSourceIndex}
+        onSelectSource={(index) => {
+          setAutoFallbackReason(null);
+          setSelectedSourceIndex(index);
+          void rememberSourcePreference(availableSources[index]);
+        }}
+        onPlaybackFailure={(reason) => {
+          if (moveToBestAlternative(reason ? `Source failed (${reason}). Switched automatically.` : 'Source failed. Switched automatically.')) {
+            return;
+          }
+          setAutoFallbackReason(reason ? `Playback failed: ${reason}` : 'Playback failed for this source.');
+          setRetryToken((value) => value + 1);
+        }}
         mediaKind={mediaKind}
         subtitleUrl={subtitleUrl}
+        key={`${resolvedUrl}:${selectedSourceIndex}:${retryToken}`}
+      />
+    );
+  }
+
+  if (mediaKind === 'dash') {
+    return (
+      <DashPlayer
+        url={resolvedUrl}
+        title={safeTitle}
+        sources={availableSources}
+        selectedSourceIndex={selectedSourceIndex}
+        onSelectSource={(index) => {
+          setAutoFallbackReason(null);
+          setSelectedSourceIndex(index);
+          void rememberSourcePreference(availableSources[index]);
+        }}
       />
     );
   }
 
   return (
-    <EmbeddedPlayer
-      embedUrl={buildWebEmbedUrl(resolvedUrl)}
-      originalUrl={resolvedUrl}
-      title={safeTitle}
-      sources={availableSources}
-      selectedSourceIndex={selectedSourceIndex}
-      onSelectSource={setSelectedSourceIndex}
-      mediaKind={mediaKind}
-    />
+    <View style={styles.container}>
+      {autoFallbackReason ? (
+        <View style={styles.autoFallbackBanner}>
+          <MaterialIcons name="bolt" size={16} color="#FFF" />
+          <Text style={styles.autoFallbackText}>{autoFallbackReason}</Text>
+        </View>
+      ) : null}
+      <EmbeddedPlayer
+        embedUrl={buildWebEmbedUrl(resolvedUrl)}
+        originalUrl={resolvedUrl}
+        title={safeTitle}
+        sources={availableSources}
+        selectedSourceIndex={selectedSourceIndex}
+        onSelectSource={(index) => {
+          setAutoFallbackReason(null);
+          setSelectedSourceIndex(index);
+          void rememberSourcePreference(availableSources[index]);
+        }}
+        mediaKind={mediaKind}
+      />
+    </View>
   );
 }
 
@@ -882,4 +1157,24 @@ const styles = StyleSheet.create({
   unsupportedHint: { fontSize: 12, color: theme.textMuted, textAlign: 'center' },
   openExternalBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 12, marginTop: 8 },
   openExternalText: { fontSize: 14, fontWeight: '700', color: '#000' },
+  autoFallbackBanner: {
+    position: 'absolute',
+    top: 48,
+    alignSelf: 'center',
+    zIndex: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(59,130,246,0.92)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  autoFallbackText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFF',
+  },
 });

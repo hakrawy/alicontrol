@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAlert } from '@/template';
@@ -17,6 +17,10 @@ const emptyForm = {
   stream_url: '',
   stream_type: 'direct',
   notes: '',
+  headers: '{}',
+  behavior_hints: '{}',
+  proxy_required: false,
+  priority: '0',
 };
 
 export default function AdminSources() {
@@ -39,9 +43,22 @@ export default function AdminSources() {
     ? {
         title: 'إدارة مصادر التشغيل',
         search: 'ابحث عن فيلم أو مسلسل...',
-        choose: 'اختر العنصر أولًا',
+        choose: 'اختر عنصرًا أولًا',
         save: 'حفظ المصدر',
         checking: 'فحص',
+        provider: 'الإضافة / المزود',
+        server: 'اسم السيرفر',
+        quality: 'الجودة',
+        lang: 'اللغة',
+        subtitle: 'الترجمة',
+        type: 'نوع الرابط',
+        notes: 'ملاحظات',
+        headers: 'Headers JSON',
+        hints: 'Behavior Hints JSON',
+        proxy: 'يحتاج Proxy / Headers',
+        priority: 'الأولوية',
+        current: 'المصادر الحالية',
+        validate: 'فحص',
       }
     : {
         title: 'Playback Source Manager',
@@ -49,6 +66,19 @@ export default function AdminSources() {
         choose: 'Choose a content item first',
         save: 'Save Source',
         checking: 'Validate',
+        provider: 'Provider / Add-on',
+        server: 'Server name',
+        quality: 'Quality',
+        lang: 'Language',
+        subtitle: 'Subtitle',
+        type: 'Stream type',
+        notes: 'Notes',
+        headers: 'Headers JSON',
+        hints: 'Behavior Hints JSON',
+        proxy: 'Proxy / special headers required',
+        priority: 'Priority',
+        current: 'Current Sources',
+        validate: 'Validate',
       };
 
   useEffect(() => {
@@ -87,14 +117,28 @@ export default function AdminSources() {
     }
     setWorking(true);
     try {
-      const validation = await api.validatePlaybackSourceUrl(form.stream_url);
+      const parsedHeaders = form.headers.trim() ? JSON.parse(form.headers) : {};
+      const parsedHints = form.behavior_hints.trim() ? JSON.parse(form.behavior_hints) : null;
+      const validation = await api.validatePlaybackSourceUrl(form.stream_url, parsedHeaders);
       await api.upsertPlaybackSourceRecord({
         id: editingSourceId || undefined,
         content_type: contentType,
         content_id: selectedContentId,
-        ...form,
+        addon_or_provider_name: form.addon_or_provider_name,
+        server_name: form.server_name,
+        quality: form.quality,
+        language: form.language,
+        subtitle: form.subtitle,
+        stream_url: form.stream_url,
+        stream_type: form.stream_type || validation.streamType,
+        notes: form.notes,
         status: validation.status,
         last_checked_at: validation.checkedAt,
+        headers: parsedHeaders,
+        behavior_hints: parsedHints,
+        proxy_required: form.proxy_required,
+        priority: Number(form.priority || 0) || 0,
+        response_time_ms: validation.responseTimeMs,
         source_origin: 'manual',
       });
       await loadSources(selectedContentId, selectedContentTitle);
@@ -147,26 +191,38 @@ export default function AdminSources() {
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>{selectedContentTitle || copy.choose}</Text>
-        <TextInput style={styles.input} value={form.addon_or_provider_name} onChangeText={(value) => setForm((prev) => ({ ...prev, addon_or_provider_name: value }))} placeholder="Provider / Add-on" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={form.server_name} onChangeText={(value) => setForm((prev) => ({ ...prev, server_name: value }))} placeholder="Server name" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={form.quality} onChangeText={(value) => setForm((prev) => ({ ...prev, quality: value }))} placeholder="Quality" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={form.language} onChangeText={(value) => setForm((prev) => ({ ...prev, language: value }))} placeholder="Language" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={form.subtitle} onChangeText={(value) => setForm((prev) => ({ ...prev, subtitle: value }))} placeholder="Subtitle URL or label" placeholderTextColor={theme.textMuted} />
-        <TextInput style={styles.input} value={form.stream_type} onChangeText={(value) => setForm((prev) => ({ ...prev, stream_type: value }))} placeholder="Stream type" placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.addon_or_provider_name} onChangeText={(value) => setForm((prev) => ({ ...prev, addon_or_provider_name: value }))} placeholder={copy.provider} placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.server_name} onChangeText={(value) => setForm((prev) => ({ ...prev, server_name: value }))} placeholder={copy.server} placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.quality} onChangeText={(value) => setForm((prev) => ({ ...prev, quality: value }))} placeholder={copy.quality} placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.language} onChangeText={(value) => setForm((prev) => ({ ...prev, language: value }))} placeholder={copy.lang} placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.subtitle} onChangeText={(value) => setForm((prev) => ({ ...prev, subtitle: value }))} placeholder={copy.subtitle} placeholderTextColor={theme.textMuted} />
+        <TextInput style={styles.input} value={form.stream_type} onChangeText={(value) => setForm((prev) => ({ ...prev, stream_type: value }))} placeholder={copy.type} placeholderTextColor={theme.textMuted} />
         <TextInput style={styles.input} value={form.stream_url} onChangeText={(value) => setForm((prev) => ({ ...prev, stream_url: value }))} placeholder="https://..." placeholderTextColor={theme.textMuted} autoCapitalize="none" autoCorrect={false} />
-        <TextInput style={[styles.input, styles.notes]} value={form.notes} onChangeText={(value) => setForm((prev) => ({ ...prev, notes: value }))} placeholder="Notes" placeholderTextColor={theme.textMuted} multiline />
+        <TextInput style={[styles.input, styles.notes]} value={form.notes} onChangeText={(value) => setForm((prev) => ({ ...prev, notes: value }))} placeholder={copy.notes} placeholderTextColor={theme.textMuted} multiline />
+        <TextInput style={[styles.input, styles.notes]} value={form.headers} onChangeText={(value) => setForm((prev) => ({ ...prev, headers: value }))} placeholder={copy.headers} placeholderTextColor={theme.textMuted} multiline />
+        <TextInput style={[styles.input, styles.notes]} value={form.behavior_hints} onChangeText={(value) => setForm((prev) => ({ ...prev, behavior_hints: value }))} placeholder={copy.hints} placeholderTextColor={theme.textMuted} multiline />
+        <TextInput style={styles.input} value={form.priority} onChangeText={(value) => setForm((prev) => ({ ...prev, priority: value }))} placeholder={copy.priority} placeholderTextColor={theme.textMuted} keyboardType="number-pad" />
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>{copy.proxy}</Text>
+          <Switch value={form.proxy_required} onValueChange={(value) => setForm((prev) => ({ ...prev, proxy_required: value }))} />
+        </View>
         <Pressable style={styles.primaryBtn} onPress={saveSource} disabled={working}>
           {working ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryBtnText}>{copy.save}</Text>}
         </Pressable>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{language === 'Arabic' ? 'المصادر الحالية' : 'Current Sources'}</Text>
+        <Text style={styles.sectionTitle}>{copy.current}</Text>
         {sources.map((source) => (
           <View key={source.id} style={styles.sourceRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.sourceTitle}>{source.addon_or_provider_name || source.server_name || 'Source'}</Text>
-              <Text style={styles.sourceMeta}>{source.server_name} • {source.quality} • {source.status}</Text>
+              <Text style={styles.sourceMeta}>
+                {[source.server_name, source.quality, source.language, source.status].filter(Boolean).join(' • ')}
+              </Text>
+              <Text style={styles.sourceHint}>
+                response: {source.response_time_ms ?? '-'} ms • priority: {source.priority ?? 0}
+              </Text>
             </View>
             <Pressable
               style={styles.iconBtn}
@@ -180,6 +236,10 @@ export default function AdminSources() {
                   stream_url: source.stream_url,
                   stream_type: source.stream_type,
                   notes: source.notes,
+                  headers: JSON.stringify(source.headers || {}, null, 2),
+                  behavior_hints: JSON.stringify(source.behavior_hints || {}, null, 2),
+                  proxy_required: Boolean(source.proxy_required),
+                  priority: String(source.priority ?? 0),
                 });
                 setEditingSourceId(source.id);
               }}
@@ -223,18 +283,21 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
   chipText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   chipTextActive: { color: '#FFF' },
-  input: { height: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight, paddingHorizontal: 14, color: '#FFF' },
-  notes: { height: 88, paddingTop: 12, textAlignVertical: 'top' },
+  input: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight, paddingHorizontal: 14, paddingVertical: 10, color: '#FFF' },
+  notes: { minHeight: 88, textAlignVertical: 'top' },
   list: { gap: 8 },
   listItem: { paddingHorizontal: 14, paddingVertical: 12, borderRadius: 12, backgroundColor: theme.surfaceLight, borderWidth: 1, borderColor: theme.border },
   listItemActive: { borderColor: theme.primary, backgroundColor: theme.primaryDark },
   listTitle: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   listMeta: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+  switchLabel: { color: '#FFF', fontSize: 13, fontWeight: '600' },
   primaryBtn: { height: 46, borderRadius: 12, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center' },
   primaryBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
   sourceRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.surfaceLight, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: theme.border },
   sourceTitle: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   sourceMeta: { fontSize: 12, color: theme.textSecondary, marginTop: 2 },
+  sourceHint: { fontSize: 11, color: theme.textMuted, marginTop: 2 },
   iconBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: theme.surface, alignItems: 'center', justifyContent: 'center' },
 });

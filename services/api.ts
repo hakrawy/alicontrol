@@ -16,6 +16,12 @@ export interface StreamSource {
   lastCheckedAt?: string | null;
   streamType?: string;
   externalUrl?: string;
+  headers?: Record<string, string>;
+  behaviorHints?: Record<string, any> | null;
+  proxyRequired?: boolean;
+  isWorking?: boolean;
+  responseTimeMs?: number | null;
+  priority?: number;
 }
 
 export interface PlaybackSourceRecord {
@@ -33,8 +39,24 @@ export interface PlaybackSourceRecord {
   last_checked_at?: string | null;
   source_origin: string;
   notes: string;
+  headers?: Record<string, string>;
+  behavior_hints?: Record<string, any> | null;
+  proxy_required?: boolean;
+  priority?: number;
+  response_time_ms?: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AddonConfigField {
+  key: string;
+  label: string;
+  type: 'text' | 'password' | 'select' | 'boolean' | 'number' | 'json';
+  required?: boolean;
+  defaultValue?: string | number | boolean | null;
+  options?: Array<{ label: string; value: string }>;
+  placeholder?: string;
+  description?: string;
 }
 
 export interface AddonCatalog {
@@ -63,6 +85,9 @@ export interface AddonManifest {
   resources?: AddonResource[];
   types?: string[];
   idPrefixes?: string[];
+  config?: any;
+  addonConfig?: any;
+  configuration?: any;
 }
 
 export interface AddonRecord {
@@ -76,6 +101,9 @@ export interface AddonRecord {
   catalogs: AddonCatalog[];
   resources: string[];
   types: string[];
+  addon_kind?: AddonKind;
+  config_schema?: AddonConfigField[] | null;
+  config_values?: Record<string, any> | null;
   enabled: boolean;
   last_tested_at?: string | null;
   last_imported_at?: string | null;
@@ -657,6 +685,44 @@ export function getAddonResourceNames(resources: AddonResource[] | string[] | un
   return Array.from(new Set(resources.map((resource) => extractAddonResourceName(resource)).filter(Boolean)));
 }
 
+function normalizeAddonConfigField(rawField: any, index: number): AddonConfigField | null {
+  if (!rawField || typeof rawField !== 'object') return null;
+  const key = String(rawField.key || rawField.name || rawField.id || `field_${index + 1}`).trim();
+  if (!key) return null;
+  const normalizedType = String(rawField.type || rawField.input || 'text').toLowerCase();
+  const type: AddonConfigField['type'] =
+    normalizedType === 'password' ? 'password'
+      : normalizedType === 'select' || Array.isArray(rawField.options) ? 'select'
+      : normalizedType === 'boolean' || normalizedType === 'switch' ? 'boolean'
+      : normalizedType === 'number' ? 'number'
+      : normalizedType === 'json' ? 'json'
+      : 'text';
+  const options = Array.isArray(rawField.options)
+    ? rawField.options.map((option: any) =>
+        typeof option === 'string'
+          ? { label: option, value: option }
+          : { label: String(option?.label || option?.name || option?.value || ''), value: String(option?.value || option?.name || option?.label || '') }
+      ).filter((option) => option.label && option.value)
+    : undefined;
+
+  return {
+    key,
+    label: String(rawField.label || rawField.title || key),
+    type,
+    required: Boolean(rawField.required),
+    defaultValue: rawField.default ?? rawField.defaultValue ?? null,
+    options,
+    placeholder: typeof rawField.placeholder === 'string' ? rawField.placeholder : undefined,
+    description: typeof rawField.description === 'string' ? rawField.description : undefined,
+  };
+}
+
+export function extractAddonConfigSchema(manifest: AddonManifest | null | undefined) {
+  const rawSchema = (manifest as any)?.config || (manifest as any)?.addonConfig || (manifest as any)?.configuration || [];
+  if (!Array.isArray(rawSchema)) return [];
+  return rawSchema.map((field, index) => normalizeAddonConfigField(field, index)).filter(Boolean) as AddonConfigField[];
+}
+
 export function inferAddonKind(input: Partial<AddonRecord> | AddonManifest | null | undefined): AddonKind {
   const source = input as any;
   const catalogs = Array.isArray(source?.manifest_json?.catalogs)
@@ -681,12 +747,21 @@ export function inferAddonKind(input: Partial<AddonRecord> | AddonManifest | nul
 }
 
 function normalizeAddonRecord(row: any): AddonRecord {
+  const manifestJson = row?.manifest_json || null;
+  const inferredKind = row?.addon_kind || inferAddonKind({
+    catalogs: Array.isArray(row?.catalogs) ? row.catalogs : [],
+    resources: Array.isArray(manifestJson?.resources) ? manifestJson.resources : row?.resources,
+    manifest_json: manifestJson,
+  } as any);
   return {
     ...row,
     catalogs: Array.isArray(row?.catalogs) ? row.catalogs : [],
     resources: getAddonResourceNames(Array.isArray(row?.manifest_json?.resources) ? row.manifest_json.resources : row?.resources),
     types: Array.isArray(row?.types) ? row.types : [],
-    manifest_json: row?.manifest_json || null,
+    manifest_json: manifestJson,
+    addon_kind: inferredKind,
+    config_schema: Array.isArray(row?.config_schema) ? row.config_schema : extractAddonConfigSchema(manifestJson),
+    config_values: row?.config_values && typeof row.config_values === 'object' ? row.config_values : {},
   } as AddonRecord;
 }
 
@@ -735,6 +810,34 @@ function extractQualityFromText(rawValue: string) {
   return match ? match[1].toUpperCase() : 'Auto';
 }
 
+function rankQuality(quality?: string) {
+  const value = String(quality || '').toLowerCase();
+  if (value.includes('4k') || value.includes('2160')) return 6;
+  if (value.includes('1440')) return 5;
+  if (value.includes('1080')) return 4;
+  if (value.includes('720')) return 3;
+  if (value.includes('480')) return 2;
+  if (value.includes('360')) return 1;
+  return 0;
+}
+
+function sortSourcesForPlayback(sources: StreamSource[]) {
+  return [...sources].sort((a, b) => {
+    const statusScore = (source: StreamSource) =>
+      source.status === 'working' || source.isWorking ? 3 : source.status === 'unknown' ? 2 : source.status === 'failing' ? 1 : 0;
+    const priorityA = a.priority ?? 0;
+    const priorityB = b.priority ?? 0;
+    const responseA = Number.isFinite(a.responseTimeMs as number) ? (a.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
+    const responseB = Number.isFinite(b.responseTimeMs as number) ? (b.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
+    return (
+      (priorityB - priorityA) ||
+      (statusScore(b) - statusScore(a)) ||
+      (rankQuality(b.quality) - rankQuality(a.quality)) ||
+      (responseA - responseB)
+    );
+  });
+}
+
 function buildServerName(stream: any, fallbackIndex: number) {
   const candidates = [stream?.name, stream?.description, stream?.title];
   for (const candidate of candidates) {
@@ -758,6 +861,9 @@ function normalizeStreamSourceFromAddon(addon: AddonRecord, stream: any, fallbac
   if (!url) return null;
   const server = buildServerName(stream, fallbackIndex);
   const quality = extractQualityFromText(`${stream?.title || ''} ${stream?.description || ''} ${stream?.name || ''}`);
+  const headers = stream?.behaviorHints?.proxyHeaders && typeof stream.behaviorHints.proxyHeaders === 'object'
+    ? Object.fromEntries(Object.entries(stream.behaviorHints.proxyHeaders).map(([key, value]) => [key, String(value)]))
+    : undefined;
   return {
     label: `${addon.name} · ${server}${quality ? ` · ${quality}` : ''}`,
     url,
@@ -765,12 +871,40 @@ function normalizeStreamSourceFromAddon(addon: AddonRecord, stream: any, fallbac
     addonId: addon.id,
     server,
     quality,
+    language: typeof stream?.language === 'string' ? stream.language.trim() : undefined,
+    subtitle: Array.isArray(stream?.subtitles) && stream.subtitles[0]?.url ? String(stream.subtitles[0].url) : undefined,
+    headers,
+    behaviorHints: stream?.behaviorHints && typeof stream.behaviorHints === 'object' ? stream.behaviorHints : null,
+    proxyRequired: Boolean(stream?.behaviorHints?.notWebReady || stream?.behaviorHints?.proxyRequired || headers),
+    isWorking: true,
+    status: 'working',
+    streamType: typeof stream?.type === 'string' ? stream.type : undefined,
     externalUrl: typeof stream?.externalUrl === 'string' ? stream.externalUrl.trim() : undefined,
   };
 }
 
-async function fetchAddonJson<T>(url: string, timeoutMs = 20000): Promise<T> {
-  const response = await fetchWithTimeout(url, { method: 'GET', redirect: 'follow' }, timeoutMs);
+function applyAddonConfigToUrl(url: string, addon?: AddonRecord) {
+  if (!addon?.config_values || typeof addon.config_values !== 'object') return url;
+  const parsed = new URL(url);
+  Object.entries(addon.config_values).forEach(([key, value]) => {
+    if (!key || value === null || value === undefined || typeof value === 'object') return;
+    parsed.searchParams.set(key, String(value));
+  });
+  return parsed.toString();
+}
+
+function getAddonRequestHeaders(addon?: AddonRecord) {
+  const rawHeaders = addon?.config_values?.headers;
+  if (!rawHeaders || typeof rawHeaders !== 'object') return undefined;
+  return Object.fromEntries(
+    Object.entries(rawHeaders)
+      .map(([key, value]) => [key, String(value)])
+      .filter(([key, value]) => key && value)
+  );
+}
+
+async function fetchAddonJson<T>(url: string, timeoutMs = 20000, headers?: Record<string, string>): Promise<T> {
+  const response = await fetchWithTimeout(url, { method: 'GET', redirect: 'follow', headers }, timeoutMs);
   if (!response.ok) {
     throw new Error(`Request failed (${response.status})`);
   }
@@ -830,6 +964,8 @@ export async function fetchAllAddons() {
 
 export async function saveAddonManifest(manifestUrl: string) {
   const { manifestUrl: normalizedUrl, manifest } = await readAddonManifest(manifestUrl);
+  const addonKind = inferAddonKind(manifest);
+  const configSchema = extractAddonConfigSchema(manifest);
   const payload = {
     addon_key: manifest.id,
     manifest_url: normalizedUrl,
@@ -840,6 +976,8 @@ export async function saveAddonManifest(manifestUrl: string) {
     catalogs: manifest.catalogs || [],
     resources: getAddonResourceNames(manifest.resources || []),
     types: manifest.types || [],
+    addon_kind: addonKind,
+    config_schema: configSchema,
     manifest_json: manifest,
     enabled: true,
   };
@@ -855,6 +993,10 @@ export async function updateAddon(addonId: string, updates: Partial<AddonRecord>
   const { data, error } = await supabase.from('addons').update(payload).eq('id', addonId).select().single();
   if (error) throw error;
   return normalizeAddonRecord(data);
+}
+
+export async function saveAddonConfig(addonId: string, configValues: Record<string, any>) {
+  return updateAddon(addonId, { config_values: configValues } as Partial<AddonRecord>);
 }
 
 export async function deleteAddon(addonId: string) {
@@ -1091,29 +1233,29 @@ async function upsertExternalRef(input: Omit<AddonExternalRef, 'id'>) {
 }
 
 async function fetchAddonCatalogItems(addon: AddonRecord, catalog: AddonCatalog) {
-  const catalogUrl = buildAddonResourceUrl(
+  const catalogUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
     `catalog/${encodeURIComponent(catalog.type)}/${encodeURIComponent(catalog.id)}/skip=0.json`
-  );
-  const payload = await fetchAddonJson<{ metas?: any[] }>(catalogUrl);
+  ), addon);
+  const payload = await fetchAddonJson<{ metas?: any[] }>(catalogUrl, 20000, getAddonRequestHeaders(addon));
   return Array.isArray(payload?.metas) ? payload.metas : [];
 }
 
 async function fetchAddonMeta(addon: AddonRecord, externalType: string, externalId: string) {
-  const metaUrl = buildAddonResourceUrl(
+  const metaUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
     `meta/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
-  );
-  const payload = await fetchAddonJson<{ meta?: any }>(metaUrl);
+  ), addon);
+  const payload = await fetchAddonJson<{ meta?: any }>(metaUrl, 20000, getAddonRequestHeaders(addon));
   return payload?.meta || null;
 }
 
 async function fetchAddonStreams(addon: AddonRecord, externalType: string, externalId: string) {
-  const streamUrl = buildAddonResourceUrl(
+  const streamUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
     `stream/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
-  );
-  const payload = await fetchAddonJson<{ streams?: any[] }>(streamUrl, ADDON_STREAM_TIMEOUT_MS);
+  ), addon);
+  const payload = await fetchAddonJson<{ streams?: any[] }>(streamUrl, ADDON_STREAM_TIMEOUT_MS, getAddonRequestHeaders(addon));
   return Array.isArray(payload?.streams) ? payload.streams : [];
 }
 
@@ -1474,7 +1616,7 @@ export async function fetchPlaybackSourcesForContent(
   const candidates = buildLookupCandidates(contentType, contentId, identity, externalRefs);
 
   if (streamAddons.length === 0 || candidates.length === 0) {
-    return uniqueSources(manualSources);
+    return sortSourcesForPlayback(uniqueSources(manualSources));
   }
 
   const addonSourcesNested = await Promise.all(
@@ -1488,7 +1630,7 @@ export async function fetchPlaybackSourcesForContent(
     })
   );
 
-  return uniqueSources([...manualSources, ...addonSourcesNested.flat()]);
+  return sortSourcesForPlayback(uniqueSources([...manualSources, ...addonSourcesNested.flat()]));
 }
 
 function normalizePlaybackSourceRecordToStreamSource(row: any): StreamSource {
@@ -1503,6 +1645,12 @@ function normalizePlaybackSourceRecordToStreamSource(row: any): StreamSource {
     status: row?.status || 'unknown',
     lastCheckedAt: row?.last_checked_at || null,
     streamType: row?.stream_type?.trim() || 'direct',
+    headers: row?.headers && typeof row.headers === 'object' ? row.headers : undefined,
+    behaviorHints: row?.behavior_hints && typeof row.behavior_hints === 'object' ? row.behavior_hints : null,
+    proxyRequired: Boolean(row?.proxy_required),
+    isWorking: row?.status === 'working',
+    responseTimeMs: Number.isFinite(row?.response_time_ms) ? row.response_time_ms : null,
+    priority: Number.isFinite(row?.priority) ? row.priority : 0,
     externalUrl: undefined,
   };
 }
@@ -1523,6 +1671,11 @@ function normalizePlaybackSourceRecord(row: any): PlaybackSourceRecord {
     last_checked_at: row.last_checked_at || null,
     source_origin: row.source_origin || 'manual',
     notes: row.notes || '',
+    headers: row.headers && typeof row.headers === 'object' ? row.headers : {},
+    behavior_hints: row.behavior_hints && typeof row.behavior_hints === 'object' ? row.behavior_hints : null,
+    proxy_required: Boolean(row.proxy_required),
+    priority: Number.isFinite(row.priority) ? row.priority : 0,
+    response_time_ms: Number.isFinite(row.response_time_ms) ? row.response_time_ms : null,
     created_at: row.created_at || '',
     updated_at: row.updated_at || '',
   };
@@ -1600,6 +1753,11 @@ export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceR
     last_checked_at: source.last_checked_at || null,
     source_origin: source.source_origin || 'manual',
     notes: source.notes || '',
+    headers: source.headers && typeof source.headers === 'object' ? source.headers : {},
+    behavior_hints: source.behavior_hints && typeof source.behavior_hints === 'object' ? source.behavior_hints : null,
+    proxy_required: Boolean(source.proxy_required),
+    priority: Number.isFinite(source.priority) ? source.priority : 0,
+    response_time_ms: Number.isFinite(source.response_time_ms as number) ? source.response_time_ms : null,
     updated_at: new Date().toISOString(),
   };
 
@@ -1616,16 +1774,26 @@ export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceR
   return normalizePlaybackSourceRecord(data);
 }
 
-export async function validatePlaybackSourceUrl(streamUrl: string) {
+function inferStreamTypeFromUrl(streamUrl: string) {
+  const value = streamUrl.toLowerCase();
+  if (value.includes('.m3u8')) return 'hls';
+  if (value.includes('.mpd')) return 'dash';
+  if (/\.(mp4|m4v|mov|webm)(\?|$)/i.test(value)) return 'mp4';
+  return 'direct';
+}
+
+export async function validatePlaybackSourceUrl(streamUrl: string, headers?: Record<string, string>) {
   if (!isHttpUrl(streamUrl)) {
-    return { status: 'failing' as const, message: 'Invalid URL', checkedAt: new Date().toISOString() };
+    return { status: 'failing' as const, message: 'Invalid URL', checkedAt: new Date().toISOString(), responseTimeMs: null, streamType: inferStreamTypeFromUrl(streamUrl) };
   }
 
+  const startedAt = Date.now();
   try {
-    const response = await fetch(streamUrl, { method: 'GET', redirect: 'follow' });
+    const response = await fetch(streamUrl, { method: 'GET', redirect: 'follow', headers });
     const checkedAt = new Date().toISOString();
+    const responseTimeMs = Date.now() - startedAt;
     if (!response.ok) {
-      return { status: 'failing' as const, message: `HTTP ${response.status}`, checkedAt };
+      return { status: 'failing' as const, message: `HTTP ${response.status}`, checkedAt, responseTimeMs, streamType: inferStreamTypeFromUrl(streamUrl) };
     }
 
     const contentType = response.headers.get('content-type') || '';
@@ -1638,12 +1806,16 @@ export async function validatePlaybackSourceUrl(streamUrl: string) {
       status: looksPlayable ? ('working' as const) : ('unknown' as const),
       message: looksPlayable ? 'Playable' : 'Response did not look like a media manifest',
       checkedAt,
+      responseTimeMs,
+      streamType: contentType.includes('mpegurl') ? 'hls' : inferStreamTypeFromUrl(streamUrl),
     };
   } catch (error: any) {
     return {
       status: 'failing' as const,
       message: error?.message || 'Request failed',
       checkedAt: new Date().toISOString(),
+      responseTimeMs: null,
+      streamType: inferStreamTypeFromUrl(streamUrl),
     };
   }
 }
@@ -1651,12 +1823,14 @@ export async function validatePlaybackSourceUrl(streamUrl: string) {
 export async function validatePlaybackSourceRecord(id: string) {
   const { data, error } = await supabase.from('playback_sources').select('*').eq('id', id).single();
   if (error) throw error;
-  const result = await validatePlaybackSourceUrl(data.stream_url);
+  const result = await validatePlaybackSourceUrl(data.stream_url, data.headers || undefined);
   return upsertPlaybackSourceRecord({
     id,
     ...data,
     status: result.status,
     last_checked_at: result.checkedAt,
+    response_time_ms: result.responseTimeMs,
+    stream_type: result.streamType || data.stream_type,
   });
 }
 
@@ -1822,7 +1996,10 @@ export async function importPlaybackSources(contentType: 'movie' | 'series' | 'e
       continue;
     }
 
-    const validation = await validatePlaybackSourceUrl(String(item.stream_url || item.url || '').trim());
+    const validation = await validatePlaybackSourceUrl(
+      String(item.stream_url || item.url || '').trim(),
+      item.headers && typeof item.headers === 'object' ? item.headers : undefined
+    );
     const existing = await supabase
       .from('playback_sources')
       .select('id')
@@ -1844,6 +2021,11 @@ export async function importPlaybackSources(contentType: 'movie' | 'series' | 'e
       stream_type: item.stream_type || 'direct',
       status: validation.status,
       last_checked_at: validation.checkedAt,
+      headers: item.headers && typeof item.headers === 'object' ? item.headers : {},
+      behavior_hints: item.behavior_hints && typeof item.behavior_hints === 'object' ? item.behavior_hints : null,
+      proxy_required: Boolean(item.proxy_required),
+      priority: Number(item.priority || 0) || 0,
+      response_time_ms: validation.responseTimeMs,
       source_origin: method,
       notes: item.notes || '',
     });

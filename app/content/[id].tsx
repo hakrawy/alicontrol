@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { theme } from '../../constants/theme';
 import { useAppContext } from '../../contexts/AppContext';
 import * as api from '../../services/api';
 import type { ContentItem, Movie, Series, Season, StreamSource } from '../../services/api';
+import PlaybackSourceSheet from '../../components/PlaybackSourceSheet';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BACKDROP_HEIGHT = 380;
@@ -87,6 +88,8 @@ export default function ContentDetailScreen() {
   const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
   const [selectedQuality, setSelectedQuality] = useState<string | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
+  const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -204,6 +207,29 @@ export default function ContentDetailScreen() {
         .map((source) => source.quality || 'Auto')
     )
   );
+  const languageOptions = Array.from(
+    new Set(
+      playbackSources
+        .filter((source) =>
+          (source.addon || 'Direct') === selectedAddon &&
+          (source.server || source.label) === selectedServer &&
+          (source.quality || 'Auto') === selectedQuality
+        )
+        .map((source) => source.language || 'Unknown')
+    )
+  );
+  const subtitleOptions = Array.from(
+    new Set(
+      playbackSources
+        .filter((source) =>
+          (source.addon || 'Direct') === selectedAddon &&
+          (source.server || source.label) === selectedServer &&
+          (source.quality || 'Auto') === selectedQuality &&
+          (source.language || 'Unknown') === selectedLanguage
+        )
+        .map((source) => source.subtitle || 'None')
+    )
+  );
 
   const openSourcePicker = (sources: StreamSource[]) => {
     if (sources.length === 0) {
@@ -225,10 +251,23 @@ export default function ContentDetailScreen() {
     const defaultAddon = sources[0].addon || 'Direct';
     const defaultServer = sources.find((source) => (source.addon || 'Direct') === defaultAddon)?.server || sources[0].label;
     const defaultQuality = sources.find((source) => (source.addon || 'Direct') === defaultAddon && (source.server || source.label) === defaultServer)?.quality || 'Auto';
+    const defaultLanguage = sources.find((source) =>
+      (source.addon || 'Direct') === defaultAddon &&
+      (source.server || source.label) === defaultServer &&
+      (source.quality || 'Auto') === defaultQuality
+    )?.language || 'Unknown';
+    const defaultSubtitle = sources.find((source) =>
+      (source.addon || 'Direct') === defaultAddon &&
+      (source.server || source.label) === defaultServer &&
+      (source.quality || 'Auto') === defaultQuality &&
+      (source.language || 'Unknown') === defaultLanguage
+    )?.subtitle || 'None';
     setPlaybackSources(sources);
     setSelectedAddon(defaultAddon);
     setSelectedServer(defaultServer);
     setSelectedQuality(defaultQuality);
+    setSelectedLanguage(defaultLanguage);
+    setSelectedSubtitle(defaultSubtitle);
     setSourcePickerOpen(true);
   };
 
@@ -236,7 +275,9 @@ export default function ContentDetailScreen() {
     const filteredSources = playbackSources.filter((source) =>
       (source.addon || 'Direct') === selectedAddon &&
       (source.server || source.label) === selectedServer &&
-      (source.quality || 'Auto') === selectedQuality
+      (source.quality || 'Auto') === selectedQuality &&
+      (source.language || 'Unknown') === selectedLanguage &&
+      (source.subtitle || 'None') === selectedSubtitle
     );
     const activeSource = filteredSources[0];
     if (!activeSource) {
@@ -251,7 +292,7 @@ export default function ContentDetailScreen() {
         playbackSources,
         activeSource.url,
         content.title,
-        isMovie ? movieData.subtitle_url : undefined,
+        activeSource.subtitle || (isMovie ? movieData.subtitle_url : undefined),
         isMovie
           ? { viewerContentId: content.id, viewerContentType: 'movie' }
           : { viewerContentId: content.id, viewerContentType: 'series' }
@@ -288,9 +329,13 @@ export default function ContentDetailScreen() {
       const defaultAddon = combinedSources[0]?.addon || 'Direct';
       const defaultServer = combinedSources[0]?.server || combinedSources[0]?.label || 'Server 1';
       const defaultQuality = combinedSources[0]?.quality || 'Auto';
+      const defaultLanguage = combinedSources[0]?.language || 'Unknown';
+      const defaultSubtitle = combinedSources[0]?.subtitle || 'None';
       setSelectedAddon(defaultAddon);
       setSelectedServer(defaultServer);
       setSelectedQuality(defaultQuality);
+      setSelectedLanguage(defaultLanguage);
+      setSelectedSubtitle(defaultSubtitle);
       setSourcePickerOpen(true);
     } catch (error: any) {
       showAlert('Playback failed', error?.message || 'Could not prepare playback sources.');
@@ -524,60 +569,54 @@ export default function ContentDetailScreen() {
         </Pressable>
       </Animated.View>
 
-      <Modal visible={sourcePickerOpen} transparent animationType="fade" onRequestClose={() => setSourcePickerOpen(false)}>
-        <View style={styles.modalScrim}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Choose Playback Source</Text>
-            <Text style={styles.modalHint}>Select the add-on, server, and quality you want to play.</Text>
-
-            <Text style={styles.modalSection}>Add-on</Text>
-            <View style={styles.optionWrap}>
-              {addonOptions.map((addon) => (
-                <Pressable key={addon} style={[styles.optionChip, selectedAddon === addon && styles.optionChipActive]} onPress={() => {
-                  setSelectedAddon(addon);
-                  const nextServer = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon).map((source) => source.server || source.label)))[0] || 'Server 1';
-                  const nextQuality = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon && (source.server || source.label) === nextServer).map((source) => source.quality || 'Auto')))[0] || 'Auto';
-                  setSelectedServer(nextServer);
-                  setSelectedQuality(nextQuality);
-                }}>
-                  <Text style={[styles.optionChipText, selectedAddon === addon && styles.optionChipTextActive]}>{addon}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.modalSection}>Server</Text>
-            <View style={styles.optionWrap}>
-              {serverOptions.map((server) => (
-                <Pressable key={server} style={[styles.optionChip, selectedServer === server && styles.optionChipActive]} onPress={() => {
-                  setSelectedServer(server);
-                  const nextQuality = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === server).map((source) => source.quality || 'Auto')))[0] || 'Auto';
-                  setSelectedQuality(nextQuality);
-                }}>
-                  <Text style={[styles.optionChipText, selectedServer === server && styles.optionChipTextActive]}>{server}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.modalSection}>Quality</Text>
-            <View style={styles.optionWrap}>
-              {qualityOptions.map((quality) => (
-                <Pressable key={quality} style={[styles.optionChip, selectedQuality === quality && styles.optionChipActive]} onPress={() => setSelectedQuality(quality)}>
-                  <Text style={[styles.optionChipText, selectedQuality === quality && styles.optionChipTextActive]}>{quality}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalSecondaryBtn} onPress={() => setSourcePickerOpen(false)}>
-                <Text style={styles.modalSecondaryBtnText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={styles.modalPrimaryBtn} onPress={playSelectedSource}>
-                <Text style={styles.modalPrimaryBtnText}>Play</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <PlaybackSourceSheet
+        visible={sourcePickerOpen}
+        addons={addonOptions}
+        servers={serverOptions}
+        qualities={qualityOptions}
+        languages={languageOptions}
+        subtitles={subtitleOptions}
+        selectedAddon={selectedAddon}
+        selectedServer={selectedServer}
+        selectedQuality={selectedQuality}
+        selectedLanguage={selectedLanguage}
+        selectedSubtitle={selectedSubtitle}
+        onSelectAddon={(addon) => {
+          setSelectedAddon(addon);
+          const nextServer = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon).map((source) => source.server || source.label)))[0] || 'Server 1';
+          const nextQuality = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon && (source.server || source.label) === nextServer).map((source) => source.quality || 'Auto')))[0] || 'Auto';
+          const nextLanguage = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon && (source.server || source.label) === nextServer && (source.quality || 'Auto') === nextQuality).map((source) => source.language || 'Unknown')))[0] || 'Unknown';
+          const nextSubtitle = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === addon && (source.server || source.label) === nextServer && (source.quality || 'Auto') === nextQuality && (source.language || 'Unknown') === nextLanguage).map((source) => source.subtitle || 'None')))[0] || 'None';
+          setSelectedServer(nextServer);
+          setSelectedQuality(nextQuality);
+          setSelectedLanguage(nextLanguage);
+          setSelectedSubtitle(nextSubtitle);
+        }}
+        onSelectServer={(server) => {
+          setSelectedServer(server);
+          const nextQuality = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === server).map((source) => source.quality || 'Auto')))[0] || 'Auto';
+          const nextLanguage = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === server && (source.quality || 'Auto') === nextQuality).map((source) => source.language || 'Unknown')))[0] || 'Unknown';
+          const nextSubtitle = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === server && (source.quality || 'Auto') === nextQuality && (source.language || 'Unknown') === nextLanguage).map((source) => source.subtitle || 'None')))[0] || 'None';
+          setSelectedQuality(nextQuality);
+          setSelectedLanguage(nextLanguage);
+          setSelectedSubtitle(nextSubtitle);
+        }}
+        onSelectQuality={(quality) => {
+          setSelectedQuality(quality);
+          const nextLanguage = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === selectedServer && (source.quality || 'Auto') === quality).map((source) => source.language || 'Unknown')))[0] || 'Unknown';
+          const nextSubtitle = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === selectedServer && (source.quality || 'Auto') === quality && (source.language || 'Unknown') === nextLanguage).map((source) => source.subtitle || 'None')))[0] || 'None';
+          setSelectedLanguage(nextLanguage);
+          setSelectedSubtitle(nextSubtitle);
+        }}
+        onSelectLanguage={(value) => {
+          setSelectedLanguage(value);
+          const nextSubtitle = Array.from(new Set(playbackSources.filter((source) => (source.addon || 'Direct') === selectedAddon && (source.server || source.label) === selectedServer && (source.quality || 'Auto') === selectedQuality && (source.language || 'Unknown') === value).map((source) => source.subtitle || 'None')))[0] || 'None';
+          setSelectedSubtitle(nextSubtitle);
+        }}
+        onSelectSubtitle={setSelectedSubtitle}
+        onClose={() => setSourcePickerOpen(false)}
+        onPlay={playSelectedSource}
+      />
     </View>
   );
 }
@@ -635,19 +674,4 @@ const styles = StyleSheet.create({
   stickyBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingTop: 30 },
   stickyPlayBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF', height: 52, borderRadius: 12 },
   stickyPlayText: { fontSize: 16, fontWeight: '700', color: '#000' },
-  modalScrim: { flex: 1, backgroundColor: 'rgba(0,0,0,0.68)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modalCard: { width: '100%', maxWidth: 540, borderRadius: 18, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, padding: 20, gap: 14 },
-  modalTitle: { fontSize: 20, fontWeight: '800', color: '#FFF' },
-  modalHint: { fontSize: 13, color: theme.textSecondary, lineHeight: 20 },
-  modalSection: { fontSize: 12, fontWeight: '700', color: theme.textMuted, letterSpacing: 0.7, marginTop: 4 },
-  optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  optionChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, backgroundColor: theme.surfaceLight, borderWidth: 1, borderColor: theme.border },
-  optionChipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
-  optionChipText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-  optionChipTextActive: { color: '#FFF' },
-  modalActions: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  modalSecondaryBtn: { flex: 1, height: 46, borderRadius: 12, borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center' },
-  modalSecondaryBtnText: { fontSize: 14, fontWeight: '700', color: theme.textSecondary },
-  modalPrimaryBtn: { flex: 1, height: 46, borderRadius: 12, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
-  modalPrimaryBtnText: { fontSize: 14, fontWeight: '700', color: '#000' },
 });
