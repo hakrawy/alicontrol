@@ -14,7 +14,7 @@ import { useLocale } from '../../contexts/LocaleContext';
 type ViewMode = 'list' | 'form' | 'seasons';
 
 const emptySeriesForm = {
-  title: '', description: '', poster: '', backdrop: '', trailer_url: '', genre: '', year: '', rating: '', cast_members: '', imdb_id: '', tmdb_id: '',
+  title: '', description: '', poster: '', backdrop: '', trailer_url: '', genre: '', year: '', rating: '', cast_members: '', imdb_id: '', tmdb_id: '', stream_sources: '',
   is_featured: false, is_trending: false, is_new: false, is_exclusive: false, is_published: true,
 };
 
@@ -43,7 +43,7 @@ export default function AdminSeries() {
   const [showEpisodeForm, setShowEpisodeForm] = useState(false);
   const [editingEpisodeId, setEditingEpisodeId] = useState<string | null>(null);
   const [episodeSeasonId, setEpisodeSeasonId] = useState<string | null>(null);
-  const [episodeForm, setEpisodeForm] = useState({ number: '', title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', duration: '' });
+  const [episodeForm, setEpisodeForm] = useState({ number: '', title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', download_url: '', duration: '' });
   const copy = language === 'Arabic'
     ? {
         addSeries: 'إضافة مسلسل',
@@ -84,12 +84,22 @@ export default function AdminSeries() {
     setSelectedIds([]);
   };
 
-  const handleEdit = (s: Series) => {
+  const handleEdit = async (s: Series) => {
+    const sourceRows = await api.fetchPlaybackSourceRecords('series', s.id).catch(() => []);
     setEditingId(s.id);
     setForm({
       title: s.title, description: s.description || '', poster: s.poster || '', backdrop: s.backdrop || '',
       trailer_url: s.trailer_url || '', genre: (s.genre || []).join(', '), year: String(s.year || ''),
       rating: String(s.rating || ''), cast_members: (s.cast_members || []).join(', '), imdb_id: s.imdb_id || '', tmdb_id: s.tmdb_id || '',
+      stream_sources: api.formatStreamSourcesInput(sourceRows.map((row) => ({
+        label: row.server_name || row.addon_or_provider_name,
+        url: row.stream_url,
+        server: row.server_name,
+        addon: row.addon_or_provider_name,
+        quality: row.quality,
+        language: row.language,
+        subtitle: row.subtitle,
+      }))),
       is_featured: s.is_featured, is_trending: s.is_trending, is_new: s.is_new,
       is_exclusive: s.is_exclusive, is_published: s.is_published,
     });
@@ -100,7 +110,7 @@ export default function AdminSeries() {
     if (!form.title.trim()) { showAlert('Error', 'Title is required'); return; }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     try {
-      await api.upsertSeries({
+      const savedSeries = await api.upsertSeries({
         ...(editingId ? { id: editingId } : {}),
         title: form.title, description: form.description, poster: form.poster, backdrop: form.backdrop,
         trailer_url: form.trailer_url, genre: form.genre.split(',').map(g => g.trim()).filter(Boolean),
@@ -109,6 +119,7 @@ export default function AdminSeries() {
         is_featured: form.is_featured, is_trending: form.is_trending, is_new: form.is_new,
         is_exclusive: form.is_exclusive, is_published: form.is_published,
       } as any);
+      await api.syncManualPlaybackSourcesForContent('series', savedSeries.id, api.parseStreamSourcesInput(form.stream_sources), 'Series Manual');
       resetForm(); load();
       showAlert('Success', editingId ? 'Series updated' : 'Series added');
     } catch (err: any) { showAlert('Error', err.message); }
@@ -229,10 +240,11 @@ export default function AdminSeries() {
         stream_url: episodeForm.stream_url,
         stream_sources: api.parseStreamSourcesInput(episodeForm.stream_url),
         subtitle_url: episodeForm.subtitle_url,
+        download_url: episodeForm.download_url,
         duration: episodeForm.duration,
       });
       setShowEpisodeForm(false); setEditingEpisodeId(null); setEpisodeSeasonId(null);
-      setEpisodeForm({ number: '', title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', duration: '' });
+      setEpisodeForm({ number: '', title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', download_url: '', duration: '' });
       refreshSeasons();
     } catch (err: any) { showAlert('Error', err.message); }
   };
@@ -251,7 +263,7 @@ export default function AdminSeries() {
     const nextNum = (season?.episodes?.length || 0) + 1;
     setEpisodeSeasonId(seasonId);
     setEditingEpisodeId(null);
-    setEpisodeForm({ number: String(nextNum), title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', duration: '' });
+    setEpisodeForm({ number: String(nextNum), title: '', description: '', thumbnail: '', stream_url: '', subtitle_url: '', download_url: '', duration: '' });
     setShowEpisodeForm(true);
   };
 
@@ -261,7 +273,7 @@ export default function AdminSeries() {
     setEpisodeForm({
       number: String(ep.number), title: ep.title, description: ep.description || '',
       thumbnail: ep.thumbnail || '', stream_url: api.formatStreamSourcesInput(ep.stream_sources || ep.stream_url || ''),
-      subtitle_url: ep.subtitle_url || '', duration: ep.duration || '',
+      subtitle_url: ep.subtitle_url || '', download_url: ep.download_url || '', duration: ep.duration || '',
     });
     setShowEpisodeForm(true);
   };
@@ -321,6 +333,7 @@ export default function AdminSeries() {
               { key: 'thumbnail', label: 'THUMBNAIL URL' },
               { key: 'stream_url', label: 'STREAM SOURCES', placeholder: 'Server 1 | https://...\nServer 2 | https://...', multiline: true },
               { key: 'subtitle_url', label: 'SUBTITLE URL' },
+              { key: 'download_url', label: 'DOWNLOAD URL', placeholder: 'https://...' },
               { key: 'duration', label: 'DURATION', placeholder: '45m' },
             ].map(f => (
               <View key={f.key} style={styles.fieldWrap}>
@@ -404,6 +417,7 @@ export default function AdminSeries() {
       { key: 'imdb_id', label: 'IMDB ID', placeholder: 'tt1234567' },
       { key: 'tmdb_id', label: 'TMDB ID', placeholder: '1399' },
       { key: 'cast_members', label: 'CAST', placeholder: 'Actor 1, Actor 2' },
+      { key: 'stream_sources', label: 'SERIES SOURCES', placeholder: 'Server 1 | https://...\nServer 2 | https://...', multiline: true },
     ];
 
     const toggleFields = [
@@ -536,7 +550,7 @@ export default function AdminSeries() {
               <Pressable style={styles.actionBtn} onPress={() => openSeasons(s)}>
                 <MaterialIcons name="list" size={18} color={theme.success} />
               </Pressable>
-              <Pressable style={styles.actionBtn} onPress={() => handleEdit(s)}>
+              <Pressable style={styles.actionBtn} onPress={() => { void handleEdit(s); }}>
                 <MaterialIcons name="edit" size={18} color={theme.primary} />
               </Pressable>
               <Pressable style={styles.actionBtn} onPress={() => handleDelete(s.id, s.title)}>

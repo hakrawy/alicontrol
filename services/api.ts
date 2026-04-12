@@ -206,6 +206,7 @@ export interface Movie {
   cast_members: string[];
   quality: string[];
   subtitle_url: string;
+  download_url?: string;
   is_featured: boolean;
   is_trending: boolean;
   is_new: boolean;
@@ -270,6 +271,7 @@ export interface Episode {
   stream_url: string;
   stream_sources?: StreamSource[];
   subtitle_url: string;
+  download_url?: string;
   duration: string;
 }
 
@@ -317,6 +319,10 @@ export interface WatchRoom {
   is_active: boolean;
   playback_time: number;
   is_playing: boolean;
+  stream_url?: string;
+  stream_sources?: StreamSource[];
+  subtitle_url?: string;
+  source_label?: string;
   created_at: string;
   host?: { username: string; avatar: string; email: string };
   member_count?: number;
@@ -1741,6 +1747,69 @@ export async function fetchPlaybackSourcesForContent(
   return sortSourcesForPlayback(uniqueSources([...manualSources, ...addonSourcesNested.flat()]));
 }
 
+export async function resolvePlayableMediaForContent(input: {
+  contentType: 'movie' | 'episode' | 'channel';
+  contentId: string;
+}) {
+  if (input.contentType === 'movie') {
+    const movie = await fetchMovieById(input.contentId);
+    const addonSources = await fetchPlaybackSourcesForContent('movie', movie.id, {
+      id: movie.id,
+      imdb_id: movie.imdb_id,
+      tmdb_id: movie.tmdb_id,
+      title: movie.title,
+      year: movie.year,
+    }).catch(() => []);
+    const sources = sortSourcesForPlayback(uniqueSources([...(movie.stream_sources || []), ...addonSources]));
+    const url = sources[0]?.url || movie.stream_url;
+    return {
+      title: movie.title,
+      url,
+      subtitleUrl: sources[0]?.subtitle || movie.subtitle_url || '',
+      sources,
+      viewerContentId: movie.id,
+      viewerContentType: 'movie' as const,
+      sourceLabel: sources[0]?.server || sources[0]?.label || 'Primary source',
+    };
+  }
+
+  if (input.contentType === 'episode') {
+    const episode = await fetchEpisodeById(input.contentId);
+    const parentSeries = await fetchSeriesById(episode.series_id).catch(() => null);
+    const addonSources = await fetchPlaybackSourcesForContent('episode', episode.id, {
+      id: episode.id,
+      imdb_id: parentSeries?.imdb_id || null,
+      tmdb_id: parentSeries?.tmdb_id || null,
+      title: episode.title,
+      year: parentSeries?.year || null,
+    }).catch(() => []);
+    const sources = sortSourcesForPlayback(uniqueSources([...(episode.stream_sources || []), ...addonSources]));
+    const url = sources[0]?.url || episode.stream_url;
+    return {
+      title: parentSeries ? `${parentSeries.title} - ${episode.title}` : episode.title,
+      url,
+      subtitleUrl: sources[0]?.subtitle || episode.subtitle_url || '',
+      sources,
+      viewerContentId: episode.series_id,
+      viewerContentType: 'series' as const,
+      sourceLabel: sources[0]?.server || sources[0]?.label || 'Primary source',
+    };
+  }
+
+  const channel = await fetchChannelById(input.contentId);
+  const sources = sortSourcesForPlayback(uniqueSources(channel.stream_sources || []));
+  const url = sources[0]?.url || channel.stream_url;
+  return {
+    title: channel.name,
+    url,
+    subtitleUrl: '',
+    sources,
+    viewerContentId: channel.id,
+    viewerContentType: 'channel' as const,
+    sourceLabel: sources[0]?.server || sources[0]?.label || 'Primary source',
+  };
+}
+
 function normalizePlaybackSourceRecordToStreamSource(row: any): StreamSource {
   return {
     label: row?.server_name?.trim() || row?.addon_or_provider_name?.trim() || 'Server 1',
@@ -1882,6 +1951,67 @@ export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceR
   return normalizePlaybackSourceRecord(data);
 }
 
+export async function syncManualPlaybackSourcesForContent(
+  contentType: 'movie' | 'series' | 'episode' | 'channel',
+  contentId: string,
+  sources: StreamSource[],
+  providerName = 'Manual'
+) {
+  const { data, error } = await supabase
+    .from('playback_sources')
+    .select('*')
+    .eq('content_type', contentType)
+    .eq('content_id', contentId)
+    .in('source_origin', ['manual', 'form']);
+  if (error) throw error;
+
+  const normalizedSources = uniqueSources(
+    sources
+      .filter((source) => source?.url?.trim())
+      .map((source, index) => ({
+        ...source,
+        label: buildSourceLabel(index, source.label || source.server || source.quality),
+        url: source.url.trim(),
+      }))
+  );
+
+  const existingRows = (data || []).map((row: any) => normalizePlaybackSourceRecord(row));
+  const nextUrls = new Set(normalizedSources.map((source) => source.url));
+
+  await Promise.all(
+    existingRows
+      .filter((row) => !nextUrls.has(row.stream_url))
+      .map((row) => deletePlaybackSourceRecord(row.id))
+  );
+
+  await Promise.all(
+    normalizedSources.map((source) => {
+      const existing = existingRows.find((row) => row.stream_url === source.url);
+      return upsertPlaybackSourceRecord({
+        id: existing?.id,
+        content_type: contentType,
+        content_id: contentId,
+        addon_or_provider_name: source.addon || providerName,
+        server_name: source.server || source.label,
+        quality: source.quality || 'Auto',
+        language: source.language || '',
+        subtitle: source.subtitle || '',
+        stream_url: source.url,
+        stream_type: source.streamType || inferStreamTypeFromUrl(source.url),
+        source_origin: 'form',
+        status: source.status || 'unknown',
+        headers: source.headers,
+        behavior_hints: source.behaviorHints,
+        proxy_required: Boolean(source.proxyRequired),
+        priority: Number.isFinite(source.priority) ? source.priority : 0,
+        response_time_ms: Number.isFinite(source.responseTimeMs as number) ? source.responseTimeMs : null,
+      });
+    })
+  );
+
+  return fetchPlaybackSourceRecords(contentType, contentId);
+}
+
 function inferStreamTypeFromUrl(streamUrl: string) {
   const value = streamUrl.toLowerCase();
   if (value.includes('.m3u8')) return 'hls';
@@ -1969,6 +2099,99 @@ async function fetchStructuredInputFromUrl(url: string) {
     throw new Error(`Import request failed with status ${response.status}`);
   }
   return response.text();
+}
+
+export async function fetchCinemetaMetadataByImdbId(imdbId: string, contentType: 'movie' | 'series') {
+  const safeId = imdbId.trim();
+  if (!/^tt\d+$/i.test(safeId)) {
+    throw new Error('IMDb ID must look like tt1234567.');
+  }
+
+  const response = await fetch(`https://v3-cinemeta.strem.io/meta/${contentType}/${safeId}.json`);
+  if (!response.ok) {
+    throw new Error(`Metadata request failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const meta = payload?.meta;
+  if (!meta) {
+    throw new Error('No metadata was returned for this IMDb ID.');
+  }
+
+  return {
+    imdb_id: safeId,
+    title: meta.name || meta.title || '',
+    original_title: meta.original_title || meta.name || '',
+    year: Number(meta.year || String(meta.releaseInfo || '').slice(0, 4)) || new Date().getFullYear(),
+    description: meta.description || '',
+    poster: meta.poster || meta.posterShape || '',
+    backdrop: meta.background || meta.poster || '',
+    genre: Array.isArray(meta.genres) ? meta.genres.filter(Boolean) : [],
+    rating: Number(meta.imdbRating || meta.rating || 0) || 0,
+    cast_members: Array.isArray(meta.cast) ? meta.cast.filter(Boolean) : [],
+    trailer_url: '',
+    duration: meta.runtime || '',
+    total_seasons: Number(meta.videos?.reduce?.((max: number, video: any) => Math.max(max, Number(video.season) || 0), 0) || 0),
+    total_episodes: Array.isArray(meta.videos) ? meta.videos.length : 0,
+    content_status: meta.status || '',
+    raw: meta,
+  };
+}
+
+export async function importContentFromImdbId(imdbId: string, contentType: 'movie' | 'series') {
+  const metadata = await fetchCinemetaMetadataByImdbId(imdbId, contentType);
+
+  if (contentType === 'movie') {
+    return upsertMovieIdentity({
+      title: metadata.title,
+      original_title: metadata.original_title,
+      year: metadata.year,
+      description: metadata.description,
+      poster: metadata.poster,
+      backdrop: metadata.backdrop,
+      genre: metadata.genre,
+      imdb_id: metadata.imdb_id,
+      rating: metadata.rating,
+      cast_members: metadata.cast_members,
+      trailer_url: metadata.trailer_url,
+      duration: metadata.duration,
+      quality: ['Auto'],
+      is_published: true,
+      is_new: true,
+      is_featured: false,
+      is_trending: false,
+      is_exclusive: false,
+      content_status: metadata.content_status || 'released',
+    } as any);
+  }
+
+  const existing = await findExistingContentByIdentity('series', {
+    imdb_id: metadata.imdb_id,
+    title: metadata.title,
+    year: metadata.year,
+  });
+  return upsertSeries({
+    ...(existing?.id ? { id: existing.id } : {}),
+    title: metadata.title,
+    original_title: metadata.original_title,
+    year: metadata.year,
+    description: metadata.description,
+    poster: metadata.poster,
+    backdrop: metadata.backdrop,
+    genre: metadata.genre,
+    imdb_id: metadata.imdb_id,
+    rating: metadata.rating,
+    cast_members: metadata.cast_members,
+    trailer_url: metadata.trailer_url,
+    total_seasons: metadata.total_seasons,
+    total_episodes: metadata.total_episodes,
+    is_published: true,
+    is_new: true,
+    is_featured: false,
+    is_trending: false,
+    is_exclusive: false,
+    content_status: metadata.content_status || 'unknown',
+  } as any);
 }
 
 async function upsertMovieIdentity(payload: Partial<Movie>) {
@@ -2157,6 +2380,7 @@ function normalizeMovie(movie: any): Movie {
     original_title: movie?.original_title || null,
     stream_url: stream_sources[0]?.url || movie?.stream_url || '',
     stream_sources,
+    download_url: movie?.download_url || '',
     live_viewers: movie?.live_viewers ?? 0,
     content_status: movie?.content_status || 'released',
   } as Movie;
@@ -2179,6 +2403,7 @@ function normalizeEpisode(episode: any): Episode {
     ...episode,
     stream_url: stream_sources[0]?.url || episode?.stream_url || '',
     stream_sources,
+    download_url: episode?.download_url || '',
   } as Episode;
 }
 
@@ -2190,6 +2415,16 @@ function normalizeChannel(channel: any): Channel {
     stream_sources,
     live_viewers: channel?.live_viewers ?? 0,
   } as Channel;
+}
+
+function normalizeWatchRoom(room: any): WatchRoom {
+  return {
+    ...room,
+    stream_url: room?.stream_url || '',
+    stream_sources: parseStreamSources(room?.stream_sources || room?.stream_url),
+    subtitle_url: room?.subtitle_url || '',
+    source_label: room?.source_label || '',
+  } as WatchRoom;
 }
 
 export function createViewerSessionId() {
@@ -2429,15 +2664,32 @@ export async function fetchActiveRooms() {
   const { data: members } = await supabase.from('watch_room_members').select('room_id').in('room_id', roomIds);
   const countMap: Record<string, number> = {};
   (members || []).forEach((m: any) => { countMap[m.room_id] = (countMap[m.room_id] || 0) + 1; });
-  return (data || []).map((r: any) => ({ ...r, member_count: countMap[r.id] || 0 })) as WatchRoom[];
+  return (data || []).map((r: any) => normalizeWatchRoom({ ...r, member_count: countMap[r.id] || 0 })) as WatchRoom[];
 }
 
-export async function createWatchRoom(room: { name: string; host_id: string; content_id: string; content_type: string; content_title: string; content_poster: string; privacy: string; max_participants: number }) {
+export async function createWatchRoom(room: {
+  name: string;
+  host_id: string;
+  content_id: string;
+  content_type: string;
+  content_title: string;
+  content_poster: string;
+  privacy: string;
+  max_participants: number;
+  stream_url?: string;
+  stream_sources?: StreamSource[];
+  subtitle_url?: string;
+  source_label?: string;
+}) {
   const room_code = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const { data, error } = await supabase.from('watch_rooms').insert({ ...room, room_code }).select().single();
+  const { data, error } = await supabase.from('watch_rooms').insert({
+    ...room,
+    room_code,
+    stream_sources: room.stream_sources || [],
+  }).select().single();
   if (error) throw error;
   await supabase.from('watch_room_members').insert({ room_id: data.id, user_id: room.host_id });
-  return data as WatchRoom;
+  return normalizeWatchRoom(data);
 }
 
 export async function joinWatchRoom(roomId: string, userId: string) {
@@ -2470,6 +2722,33 @@ export async function sendRoomMessage(roomId: string, userId: string, message: s
 export async function updateRoomPlayback(roomId: string, playbackTime: number, isPlaying: boolean) {
   const { error } = await supabase.from('watch_rooms').update({ playback_time: playbackTime, is_playing: isPlaying }).eq('id', roomId);
   if (error) throw error;
+}
+
+export async function updateWatchRoomMedia(
+  roomId: string,
+  payload: {
+    content_id?: string;
+    content_type?: 'movie' | 'episode' | 'channel';
+    content_title?: string;
+    content_poster?: string;
+    stream_url?: string;
+    stream_sources?: StreamSource[];
+    subtitle_url?: string;
+    source_label?: string;
+  }
+) {
+  const { data, error } = await supabase
+    .from('watch_rooms')
+    .update({
+      ...payload,
+      stream_sources: payload.stream_sources || [],
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', roomId)
+    .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
+    .single();
+  if (error) throw error;
+  return normalizeWatchRoom(data);
 }
 
 export async function closeWatchRoom(roomId: string) {

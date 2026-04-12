@@ -12,7 +12,7 @@ import type { Movie } from '../../services/api';
 import { useLocale } from '../../contexts/LocaleContext';
 
 const emptyForm = {
-  title: '', description: '', poster: '', backdrop: '', stream_url: '', trailer_url: '', subtitle_url: '',
+  title: '', description: '', poster: '', backdrop: '', stream_url: '', trailer_url: '', subtitle_url: '', download_url: '',
   genre: '', year: '', duration: '', rating: '', cast_members: '', quality: '', imdb_id: '', tmdb_id: '',
   is_featured: false, is_trending: false, is_new: false, is_exclusive: false, is_published: true,
 };
@@ -82,7 +82,7 @@ export default function AdminMovies() {
     setEditingId(movie.id);
     setForm({
       title: movie.title, description: movie.description || '', poster: movie.poster || '', backdrop: movie.backdrop || '',
-      stream_url: api.formatStreamSourcesInput(movie.stream_sources || movie.stream_url || ''), trailer_url: movie.trailer_url || '', subtitle_url: movie.subtitle_url || '',
+      stream_url: api.formatStreamSourcesInput(movie.stream_sources || movie.stream_url || ''), trailer_url: movie.trailer_url || '', subtitle_url: movie.subtitle_url || '', download_url: movie.download_url || '',
       genre: (movie.genre || []).join(', '), year: String(movie.year || ''),
       duration: movie.duration || '', rating: String(movie.rating || ''), cast_members: (movie.cast_members || []).join(', '),
       quality: (movie.quality || []).join(', '), imdb_id: movie.imdb_id || '', tmdb_id: movie.tmdb_id || '',
@@ -99,7 +99,7 @@ export default function AdminMovies() {
       await api.upsertMovie({
         ...(editingId ? { id: editingId } : {}),
         title: form.title, description: form.description, poster: form.poster, backdrop: form.backdrop,
-        stream_url: form.stream_url, stream_sources: api.parseStreamSourcesInput(form.stream_url), trailer_url: form.trailer_url, subtitle_url: form.subtitle_url,
+        stream_url: form.stream_url, stream_sources: api.parseStreamSourcesInput(form.stream_url), trailer_url: form.trailer_url, subtitle_url: form.subtitle_url, download_url: form.download_url,
         genre: form.genre.split(',').map(g => g.trim()).filter(Boolean),
         year: parseInt(form.year) || new Date().getFullYear(), duration: form.duration, rating: parseFloat(form.rating) || 0,
         cast_members: form.cast_members.split(',').map(c => c.trim()).filter(Boolean),
@@ -181,6 +181,7 @@ export default function AdminMovies() {
     { key: 'stream_url', label: 'STREAM SOURCES', placeholder: 'Server 1 | https://...\nServer 2 | https://...', multiline: true },
     { key: 'trailer_url', label: 'TRAILER URL', placeholder: 'https://...' },
     { key: 'subtitle_url', label: 'SUBTITLE URL', placeholder: 'https://...' },
+    { key: 'download_url', label: 'DOWNLOAD URL', placeholder: 'https://...' },
     { key: 'genre', label: 'GENRES', placeholder: 'Action, Sci-Fi, Drama' },
     { key: 'year', label: 'YEAR', placeholder: '2026' },
     { key: 'duration', label: 'DURATION', placeholder: '2h 15m' },

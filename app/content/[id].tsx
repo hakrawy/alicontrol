@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator, Linking, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -458,6 +458,18 @@ export default function ContentDetailScreen() {
     });
   };
 
+  const handleDownload = async (downloadUrl?: string) => {
+    if (!downloadUrl) {
+      showAlert('Download unavailable', 'No download URL has been added for this item yet.');
+      return;
+    }
+    try {
+      await Linking.openURL(downloadUrl);
+    } catch (error: any) {
+      showAlert('Download failed', error?.message || 'Could not open this download link.');
+    }
+  };
+
   const handleToggleFavorite = () => {
     Haptics.selectionAsync();
 
@@ -505,6 +517,11 @@ export default function ContentDetailScreen() {
               <Text style={styles.playBtnText}>{sourcesLoading ? 'Loading...' : 'Play'}</Text>
             </Pressable>
             <Pressable style={styles.trailerBtn} onPress={handlePlayTrailer}><MaterialIcons name="movie" size={20} color="#FFF" /><Text style={styles.trailerBtnText}>Trailer</Text></Pressable>
+            {isMovie && movieData.download_url ? (
+              <Pressable style={styles.secondaryActionBtn} onPress={() => void handleDownload(movieData.download_url)}>
+                <MaterialIcons name="download" size={20} color="#FFF" />
+              </Pressable>
+            ) : null}
           </View>
 
           <View style={styles.quickActions}>
@@ -579,22 +596,30 @@ export default function ContentDetailScreen() {
                   </Pressable>
                 ))}
               </ScrollView>
-              {normalizedSeasons[selectedSeason]?.episodes?.map((ep, index) => (
-                <Animated.View key={ep.id} entering={FadeInDown.delay(index * 40).duration(300)}>
-                  <Pressable style={styles.episodeCard} onPress={() => handlePlayEpisode(ep.stream_url, ep.title, ep.stream_sources || [], ep.subtitle_url)}>
-                    <View style={styles.episodeThumbnailWrap}>
-                      <Image source={{ uri: ep.thumbnail }} style={styles.episodeThumbnail} contentFit="cover" transition={200} />
-                      <View style={styles.episodePlayOverlay}><MaterialIcons name="play-circle-filled" size={32} color="rgba(255,255,255,0.9)" /></View>
-                      <View style={styles.episodeDuration}><Text style={styles.episodeDurationText}>{ep.duration}</Text></View>
-                    </View>
-                    <View style={styles.episodeInfo}>
-                      <Text style={styles.episodeNumber}>Episode {ep.number}</Text>
-                      <Text style={styles.episodeTitle} numberOfLines={1}>{ep.title}</Text>
-                      <Text style={styles.episodeDesc} numberOfLines={2}>{ep.description}</Text>
-                    </View>
-                  </Pressable>
-                </Animated.View>
-              ))}
+              <View style={styles.episodesGrid}>
+                {normalizedSeasons[selectedSeason]?.episodes?.map((ep, index) => (
+                  <Animated.View key={ep.id} entering={FadeInDown.delay(index * 40).duration(300)} style={styles.episodeCardWrap}>
+                    <Pressable style={styles.episodeCard} onPress={() => handlePlayEpisode(ep.stream_url, ep.title, ep.stream_sources || [], ep.subtitle_url)}>
+                      <View style={styles.episodeThumbnailWrap}>
+                        <Image source={{ uri: ep.thumbnail || safePoster }} style={styles.episodeThumbnail} contentFit="cover" transition={200} />
+                        <View style={styles.episodePlayOverlay}><MaterialIcons name="play-circle-filled" size={32} color="rgba(255,255,255,0.9)" /></View>
+                        <View style={styles.episodeDuration}><Text style={styles.episodeDurationText}>{ep.duration || '—'}</Text></View>
+                      </View>
+                      <View style={styles.episodeInfo}>
+                        <Text style={styles.episodeNumber}>Episode {ep.number}</Text>
+                        <Text style={styles.episodeTitle} numberOfLines={2}>{ep.title}</Text>
+                        <Text style={styles.episodeDesc} numberOfLines={3}>{ep.description || 'No episode synopsis yet.'}</Text>
+                        {ep.download_url ? (
+                          <Pressable style={styles.episodeDownloadBtn} onPress={() => void handleDownload(ep.download_url)}>
+                            <MaterialIcons name="download" size={16} color="#FFF" />
+                            <Text style={styles.episodeDownloadText}>Download</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </Pressable>
+                  </Animated.View>
+                ))}
+              </View>
             </Animated.View>
           )}
 
@@ -703,6 +728,7 @@ const styles = StyleSheet.create({
   playBtnText: { fontSize: 17, fontWeight: '700', color: '#000' },
   trailerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: theme.surfaceLight, height: 52, paddingHorizontal: 24, borderRadius: 12, borderWidth: 1, borderColor: theme.border },
   trailerBtnText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
+  secondaryActionBtn: { width: 52, height: 52, borderRadius: 12, backgroundColor: theme.surfaceLight, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.border },
   quickActions: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 24 },
   quickAction: { alignItems: 'center', gap: 6 },
   quickActionText: { fontSize: 11, fontWeight: '500', color: theme.textSecondary },
@@ -733,16 +759,20 @@ const styles = StyleSheet.create({
   seasonTabActive: { backgroundColor: theme.primary, borderColor: theme.primary },
   seasonTabText: { fontSize: 13, fontWeight: '600', color: theme.textSecondary },
   seasonTabTextActive: { color: '#FFF' },
-  episodeCard: { flexDirection: 'row', gap: 12, backgroundColor: theme.surface, borderRadius: 12, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: theme.border },
-  episodeThumbnailWrap: { width: 140, height: 80, borderRadius: 8, overflow: 'hidden' },
+  episodesGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -6 },
+  episodeCardWrap: { width: Platform.OS === 'web' ? '50%' : '100%', paddingHorizontal: 6, marginBottom: 12 },
+  episodeCard: { gap: 12, backgroundColor: theme.surface, borderRadius: 14, padding: 10, borderWidth: 1, borderColor: theme.border, minHeight: 260 },
+  episodeThumbnailWrap: { width: '100%', height: 150, borderRadius: 10, overflow: 'hidden' },
   episodeThumbnail: { width: '100%', height: '100%' },
   episodePlayOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)' },
   episodeDuration: { position: 'absolute', bottom: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   episodeDurationText: { fontSize: 10, fontWeight: '600', color: '#FFF' },
-  episodeInfo: { flex: 1, justifyContent: 'center', gap: 3 },
+  episodeInfo: { flex: 1, justifyContent: 'center', gap: 6 },
   episodeNumber: { fontSize: 11, fontWeight: '600', color: theme.primary, letterSpacing: 0.5 },
   episodeTitle: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   episodeDesc: { fontSize: 12, color: theme.textMuted, lineHeight: 17 },
+  episodeDownloadBtn: { marginTop: 'auto', flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', backgroundColor: theme.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  episodeDownloadText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   relatedPoster: { width: 120, height: 180, borderRadius: 10, marginBottom: 6 },
   relatedTitle: { fontSize: 12, fontWeight: '600', color: '#FFF', marginBottom: 2 },
   relatedRating: { fontSize: 11, fontWeight: '700', color: theme.accent },

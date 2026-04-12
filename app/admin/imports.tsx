@@ -23,6 +23,9 @@ export default function AdminImports() {
   const [sourcesMethod, setSourcesMethod] = useState<ImportMethod>('json');
   const [sourcesInput, setSourcesInput] = useState('');
   const [validateUrl, setValidateUrl] = useState('');
+  const [imdbId, setImdbId] = useState('');
+  const [imdbType, setImdbType] = useState<ContentType>('movie');
+  const [imdbPreview, setImdbPreview] = useState<any | null>(null);
   const [working, setWorking] = useState<string | null>(null);
 
   const copy = language === 'Arabic'
@@ -37,6 +40,10 @@ export default function AdminImports() {
         sourcesHint: 'استورد الروابط بشكل منفصل واربطها بالمحتوى الموجود حسب imdb_id أو tmdb_id أو title + year.',
         validateTitle: 'فحص رابط تشغيل',
         validateHint: 'اختبر الرابط قبل إضافته واعرف هل يعمل أم لا.',
+        imdbTitle: 'استيراد فيلم أو مسلسل عبر IMDb',
+        imdbHint: 'اجلب البيانات مباشرة عبر IMDb ID ثم احفظها في مكتبتك.',
+        fetchData: 'جلب البيانات',
+        saveItem: 'حفظ',
         importNow: 'استيراد الآن',
         checkNow: 'فحص الرابط',
         json: 'JSON',
@@ -56,6 +63,10 @@ export default function AdminImports() {
         sourcesHint: 'Import playback links separately and merge them into existing content by imdb_id, tmdb_id, or title + year.',
         validateTitle: 'Validate Stream URL',
         validateHint: 'Test a playback URL before approving it.',
+        imdbTitle: 'Import from IMDb ID',
+        imdbHint: 'Fetch one movie or series by IMDb ID, review it, then save it into your library.',
+        fetchData: 'Fetch Data',
+        saveItem: 'Save',
         importNow: 'Import Now',
         checkNow: 'Validate URL',
         json: 'JSON',
@@ -103,6 +114,32 @@ export default function AdminImports() {
     }
   };
 
+  const fetchImdbMetadata = async () => {
+    setWorking('imdb-fetch');
+    try {
+      const result = await api.fetchCinemetaMetadataByImdbId(imdbId.trim(), imdbType);
+      setImdbPreview(result);
+    } catch (error: any) {
+      showAlert('Fetch failed', error?.message || 'Could not fetch metadata for this IMDb ID.');
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const saveImdbMetadata = async () => {
+    setWorking('imdb-save');
+    try {
+      await api.importContentFromImdbId(imdbId.trim(), imdbType);
+      showAlert('Saved', `${imdbPreview?.title || 'Item'} was saved successfully.`);
+      setImdbPreview(null);
+      setImdbId('');
+    } catch (error: any) {
+      showAlert('Save failed', error?.message || 'Could not save this IMDb item.');
+    } finally {
+      setWorking(null);
+    }
+  };
+
   return (
     <ScrollView style={[styles.container, { direction }]} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 20 }} showsVerticalScrollIndicator={false}>
       <Text style={styles.pageTitle}>{copy.title}</Text>
@@ -113,6 +150,40 @@ export default function AdminImports() {
         <Pressable style={styles.primaryBtn} onPress={() => router.push('/admin/addons')}>
           <Text style={styles.primaryBtnText}>{copy.openManifest}</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{copy.imdbTitle}</Text>
+        <Text style={styles.cardHint}>{copy.imdbHint}</Text>
+        <View style={styles.toggleRow}>
+          {(['movie', 'series'] as ContentType[]).map((type) => (
+            <Pressable key={type} style={[styles.chip, imdbType === type && styles.chipActive]} onPress={() => setImdbType(type)}>
+              <Text style={[styles.chipText, imdbType === type && styles.chipTextActive]}>{type === 'movie' ? copy.movies : copy.series}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <TextInput
+          style={styles.input}
+          value={imdbId}
+          onChangeText={setImdbId}
+          placeholder="tt1234567"
+          placeholderTextColor={theme.textMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Pressable style={styles.primaryBtn} onPress={fetchImdbMetadata} disabled={working === 'imdb-fetch'}>
+          {working === 'imdb-fetch' ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryBtnText}>{copy.fetchData}</Text>}
+        </Pressable>
+        {imdbPreview ? (
+          <View style={styles.previewCard}>
+            <Text style={styles.previewTitle}>{imdbPreview.title}</Text>
+            <Text style={styles.previewMeta}>{imdbPreview.year} • {imdbPreview.rating || 0}</Text>
+            <Text style={styles.previewText}>{imdbPreview.description || 'No synopsis available.'}</Text>
+            <Pressable style={styles.primaryBtn} onPress={saveImdbMetadata} disabled={working === 'imdb-save'}>
+              {working === 'imdb-save' ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryBtnText}>{copy.saveItem}</Text>}
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.card}>
@@ -220,4 +291,8 @@ const styles = StyleSheet.create({
   primaryBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   secondaryBtn: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surfaceLight, alignItems: 'center', justifyContent: 'center' },
   secondaryBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  previewCard: { borderRadius: 14, backgroundColor: theme.surfaceLight, borderWidth: 1, borderColor: theme.border, padding: 14, gap: 8 },
+  previewTitle: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  previewMeta: { fontSize: 12, color: theme.textSecondary },
+  previewText: { fontSize: 13, color: theme.textSecondary, lineHeight: 20 },
 });

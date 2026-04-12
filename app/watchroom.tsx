@@ -115,15 +115,24 @@ export default function WatchRoomScreen() {
         noRooms: 'No active rooms',
         noRoomsDesc: 'Create one to start watching together!',
         room: 'Room',
+        updateRoomContent: 'Update room content',
+        roomUpdated: 'Room updated',
+        roomUpdatedDesc: 'The room now points to the latest selected content.',
       };
 
-  const getPlayerParams = (sources: StreamSource[], fallbackUrl: string, title: string, subtitleUrl?: string) => ({
+  const getPlayerParams = (
+    sources: StreamSource[],
+    fallbackUrl: string,
+    title: string,
+    subtitleUrl?: string,
+    viewer?: { viewerContentId: string; viewerContentType: api.ViewerContentType }
+  ) => ({
     title,
     url: fallbackUrl,
     sources: JSON.stringify(sources),
     subtitleUrl: subtitleUrl || '',
-    viewerContentId: '',
-    viewerContentType: 'movie' as const,
+    viewerContentId: viewer?.viewerContentId || '',
+    viewerContentType: viewer?.viewerContentType || ('movie' as const),
   });
 
   const selectedContent = contentId && contentType && contentTitle && contentPoster
@@ -228,6 +237,16 @@ export default function WatchRoomScreen() {
         return;
       }
 
+      const playback = await api.resolvePlayableMediaForContent({
+        contentType: roomContent.type === 'movie' ? 'movie' : 'episode',
+        contentId: roomContent.id,
+      });
+
+      if (!playback.url) {
+        showAlert(copy.playbackUnavailable, copy.playbackUnavailableDesc);
+        return;
+      }
+
       const room = await api.createWatchRoom({
         name: roomName.trim(),
         host_id: user.id,
@@ -237,6 +256,10 @@ export default function WatchRoomScreen() {
         content_poster: roomContent.poster,
         privacy: 'public',
         max_participants: 10,
+        stream_url: playback.url,
+        stream_sources: playback.sources,
+        subtitle_url: playback.subtitleUrl,
+        source_label: playback.sourceLabel,
       });
       setShowCreate(false);
       setRoomName('');
@@ -250,32 +273,33 @@ export default function WatchRoomScreen() {
   const handlePlayRoomContent = async () => {
     if (!selectedRoom) return;
     try {
-      let url = '';
-      let sources: StreamSource[] = [];
-      let subtitleUrl = '';
-      let viewerContentId = '';
-      let viewerContentType: api.ViewerContentType = 'movie';
+      let url = selectedRoom.stream_url || '';
+      let sources: StreamSource[] = selectedRoom.stream_sources || [];
+      let subtitleUrl = selectedRoom.subtitle_url || '';
+      let viewerContentId = selectedRoom.content_id;
+      let viewerContentType: api.ViewerContentType =
+        selectedRoom.content_type === 'channel' ? 'channel' : selectedRoom.content_type === 'episode' ? 'series' : 'movie';
 
-      if (selectedRoom.content_type === 'movie') {
-        const movie = await api.fetchMovieById(selectedRoom.content_id);
-        url = movie.stream_url;
-        sources = movie.stream_sources || [];
-        subtitleUrl = movie.subtitle_url || '';
-        viewerContentId = movie.id;
-        viewerContentType = 'movie';
-      } else if (selectedRoom.content_type === 'episode') {
-        const episode = await api.fetchEpisodeById(selectedRoom.content_id);
-        url = episode.stream_url;
-        sources = episode.stream_sources || [];
-        subtitleUrl = episode.subtitle_url || '';
-        viewerContentId = episode.series_id;
-        viewerContentType = 'series';
-      } else if (selectedRoom.content_type === 'channel') {
-        const channel = await api.fetchChannelById(selectedRoom.content_id);
-        url = channel.stream_url;
-        sources = channel.stream_sources || [];
-        viewerContentId = channel.id;
-        viewerContentType = 'channel';
+      if (!url) {
+        const playback = await api.resolvePlayableMediaForContent({
+          contentType: selectedRoom.content_type,
+          contentId: selectedRoom.content_id,
+        });
+        url = playback.url;
+        sources = playback.sources;
+        subtitleUrl = playback.subtitleUrl;
+        viewerContentId = playback.viewerContentId;
+        viewerContentType = playback.viewerContentType;
+
+        if (selectedRoom.host_id === user?.id || isAdmin) {
+          const refreshedRoom = await api.updateWatchRoomMedia(selectedRoom.id, {
+            stream_url: playback.url,
+            stream_sources: playback.sources,
+            subtitle_url: playback.subtitleUrl,
+            source_label: playback.sourceLabel,
+          });
+          setSelectedRoom(refreshedRoom);
+        }
       }
 
       if (!url) {
@@ -287,13 +311,38 @@ export default function WatchRoomScreen() {
       router.push({
         pathname: '/player',
         params: {
-          ...getPlayerParams(sources, url, selectedRoom.content_title, subtitleUrl),
-          viewerContentId,
-          viewerContentType,
+          ...getPlayerParams(sources, url, selectedRoom.content_title, subtitleUrl, {
+            viewerContentId,
+            viewerContentType,
+          }),
         },
       });
     } catch (err: any) {
       showAlert(copy.playbackError, err.message || copy.playbackError);
+    }
+  };
+
+  const handleApplySelectedContentToRoom = async () => {
+    if (!selectedRoom || !selectedContent) return;
+    try {
+      const playback = await api.resolvePlayableMediaForContent({
+        contentType: selectedContent.type === 'movie' ? 'movie' : 'episode',
+        contentId: selectedContent.id,
+      });
+      const updatedRoom = await api.updateWatchRoomMedia(selectedRoom.id, {
+        content_id: selectedContent.id,
+        content_type: selectedContent.type === 'movie' ? 'movie' : 'episode',
+        content_title: selectedContent.title,
+        content_poster: selectedContent.poster,
+        stream_url: playback.url,
+        stream_sources: playback.sources,
+        subtitle_url: playback.subtitleUrl,
+        source_label: playback.sourceLabel,
+      });
+      setSelectedRoom(updatedRoom);
+      showAlert(copy.roomUpdated, copy.roomUpdatedDesc);
+    } catch (err: any) {
+      showAlert(copy.error, err.message || copy.playbackError);
     }
   };
 
@@ -330,6 +379,12 @@ export default function WatchRoomScreen() {
                 <MaterialIcons name="admin-panel-settings" size={14} color={theme.accent} />
                 <Text style={styles.hostBadgeText}>{copy.host}: {selectedRoom.host?.username || copy.unknown}</Text>
               </View>
+              {(selectedContent && (isAdmin || selectedRoom.host_id === user?.id) && selectedContent.id !== selectedRoom.content_id) ? (
+                <Pressable style={styles.updateRoomContentBtn} onPress={handleApplySelectedContentToRoom}>
+                  <MaterialIcons name="swap-horiz" size={16} color="#FFF" />
+                  <Text style={styles.updateRoomContentText}>{copy.updateRoomContent}</Text>
+                </Pressable>
+              ) : null}
             </View>
 
             <View style={styles.reactionsRow}>
@@ -499,6 +554,19 @@ const styles = StyleSheet.create({
   videoBigPlayBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
   hostBadge: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   hostBadgeText: { fontSize: 11, fontWeight: '600', color: '#FFF' },
+  updateRoomContentBtn: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(99,102,241,0.88)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  updateRoomContentText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   reactionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.border },
   reactionBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.surface, alignItems: 'center', justifyContent: 'center' },
   reactionEmoji: { fontSize: 20 },
