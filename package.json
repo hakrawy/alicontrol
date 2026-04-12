@@ -8,6 +8,7 @@
     "reset-project": "node ./scripts/reset-project.js",
     "import:content": "node ./scripts/import-content.js",
     "import:content:dry": "node ./scripts/import-content.js --dry-run",
+    "sync:addons": "node ./scripts/sync-addons.mjs",
     "web": "expo start --web",
     "export:web": "expo export -p web",
     "lint": "expo lint"

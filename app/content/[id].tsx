@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -153,6 +153,12 @@ export default function ContentDetailScreen() {
     };
   }, [content]);
 
+  useEffect(() => {
+    if (selectedSeason >= normalizedSeasons.length) {
+      setSelectedSeason(0);
+    }
+  }, [normalizedSeasons.length, selectedSeason]);
+
   if (loading) {
     return <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color={theme.primary} /></View>;
   }
@@ -169,15 +175,35 @@ export default function ContentDetailScreen() {
   const isMovie = content.type === 'movie';
   const movieData = content as Movie;
   const seriesData = content as Series;
+  const normalizedSeasons = useMemo(
+    () =>
+      [...seasons]
+        .sort((a, b) => (a.number || 0) - (b.number || 0))
+        .map((season) => ({
+          ...season,
+          episodes: [...(season.episodes || [])].sort((a, b) => (a.number || 0) - (b.number || 0)),
+        })),
+    [seasons]
+  );
   const safeGenres = Array.isArray(content.genre) ? content.genre.filter(Boolean) : [];
   const safeCastMembers = Array.isArray(content.cast_members) ? content.cast_members.filter(Boolean) : [];
   const safeBackdrop = content.backdrop || content.poster || 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?auto=format&fit=crop&w=1400&q=80';
   const safePoster = content.poster || safeBackdrop;
   const safeDescription = content.description || 'No description available yet.';
+  const originalTitle = (content as any).original_title || null;
+  const contentStatus = (content as any).content_status || (isMovie ? 'Released' : 'Unknown');
   const isFav = isFavorite(content.id);
   const viewerLabel = content.live_viewers && content.live_viewers > 0
     ? `${api.formatViewers(content.live_viewers)} watching`
     : `${api.formatViewers(content.view_count || 0)} views`;
+  const totalSourceCount = playbackSources.length > 0
+    ? playbackSources.length
+    : isMovie
+      ? (movieData.stream_sources?.length || 0)
+      : normalizedSeasons.reduce((sum, season) => sum + (season.episodes || []).reduce((epSum, ep) => epSum + (ep.stream_sources?.length || (ep.stream_url ? 1 : 0)), 0), 0);
+  const availableQualityLabel = isMovie
+    ? (movieData.quality?.filter(Boolean)?.join(' • ') || 'Auto')
+    : Array.from(new Set(normalizedSeasons.flatMap((season) => (season.episodes || []).flatMap((episode) => (episode.stream_sources || []).map((source) => source.quality || 'Auto'))))).join(' • ') || 'Auto';
   const getPlayerParams = (
     sources: StreamSource[],
     fallbackUrl: string,
@@ -346,7 +372,7 @@ export default function ContentDetailScreen() {
 
   const handlePlay = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const selectedEpisode = seasons[selectedSeason]?.episodes?.[0];
+    const selectedEpisode = normalizedSeasons[selectedSeason]?.episodes?.[0];
     const sources = isMovie ? (movieData.stream_sources || []) : (selectedEpisode?.stream_sources || []);
     const streamUrl = isMovie ? movieData.stream_url : selectedEpisode?.stream_url;
     const targetId = isMovie ? content.id : selectedEpisode?.id;
@@ -370,7 +396,7 @@ export default function ContentDetailScreen() {
 
   const handlePlayEpisode = (epStreamUrl: string, epTitle: string, epSources: StreamSource[], epSubtitleUrl?: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const selectedEpisode = seasons.flatMap((season) => season.episodes || []).find((episode) => episode.title === epTitle && episode.stream_url === epStreamUrl);
+    const selectedEpisode = normalizedSeasons.flatMap((season) => season.episodes || []).find((episode) => episode.title === epTitle && episode.stream_url === epStreamUrl);
     void loadPlayableSources({
       contentType: 'episode',
       contentId: selectedEpisode?.id || content.id,
@@ -415,7 +441,7 @@ export default function ContentDetailScreen() {
       return;
     }
 
-    const firstEpisode = seasons[0]?.episodes?.[0];
+    const firstEpisode = normalizedSeasons[0]?.episodes?.[0];
     if (!firstEpisode) {
       showAlert('Watch Room unavailable', 'Add at least one episode before creating a watch room for this series.');
       return;
@@ -459,11 +485,12 @@ export default function ContentDetailScreen() {
           </View>
 
           <Text style={styles.title}>{content.title}</Text>
+          {originalTitle ? <Text style={styles.originalTitle}>{originalTitle}</Text> : null}
 
           <View style={styles.metaRow}>
             <View style={styles.ratingBadge}><MaterialIcons name="star" size={14} color={theme.accent} /><Text style={styles.ratingText}>{content.rating}</Text></View>
             <Text style={styles.metaText}>{content.year}</Text>
-            {isMovie ? <Text style={styles.metaText}>{movieData.duration}</Text> : <Text style={styles.metaText}>{seriesData.total_episodes} Episodes</Text>}
+            {isMovie ? <Text style={styles.metaText}>{movieData.duration || '—'}</Text> : <Text style={styles.metaText}>{seriesData.total_episodes} Episodes</Text>}
             <Text style={styles.metaText}>{viewerLabel}</Text>
             {safeGenres.length > 0 ? (
               <View style={styles.genrePills}>
@@ -493,6 +520,37 @@ export default function ContentDetailScreen() {
 
           <Text style={styles.description}>{safeDescription}</Text>
 
+          <View style={styles.detailsGrid}>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailLabel}>Type</Text>
+              <Text style={styles.detailValue}>{isMovie ? 'Movie' : 'Series'}</Text>
+            </View>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailLabel}>Status</Text>
+              <Text style={styles.detailValue}>{contentStatus}</Text>
+            </View>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailLabel}>Quality</Text>
+              <Text style={styles.detailValue}>{availableQualityLabel}</Text>
+            </View>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailLabel}>Sources</Text>
+              <Text style={styles.detailValue}>{totalSourceCount || 0}</Text>
+            </View>
+            {!isMovie ? (
+              <>
+                <View style={styles.detailCard}>
+                  <Text style={styles.detailLabel}>Seasons</Text>
+                  <Text style={styles.detailValue}>{seriesData.total_seasons || normalizedSeasons.length}</Text>
+                </View>
+                <View style={styles.detailCard}>
+                  <Text style={styles.detailLabel}>Episodes</Text>
+                  <Text style={styles.detailValue}>{seriesData.total_episodes || normalizedSeasons.reduce((sum, season) => sum + (season.episodes?.length || 0), 0)}</Text>
+                </View>
+              </>
+            ) : null}
+          </View>
+
           {safeCastMembers.length > 0 ? (
             <Animated.View entering={FadeInDown.delay(100).duration(400)} style={styles.castSection}>
               <Text style={styles.sectionLabel}>CAST</Text>
@@ -509,17 +567,19 @@ export default function ContentDetailScreen() {
             </Animated.View>
           )}
 
-          {!isMovie && seasons.length > 0 && (
+          {!isMovie && normalizedSeasons.length > 0 && (
             <Animated.View entering={FadeInDown.delay(150).duration(400)}>
               <Text style={styles.sectionLabel}>SEASONS & EPISODES</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginBottom: 16 }}>
-                {seasons.map((season, i) => (
+                {normalizedSeasons.map((season, i) => (
                   <Pressable key={season.id} onPress={() => { Haptics.selectionAsync(); setSelectedSeason(i); }} style={[styles.seasonTab, selectedSeason === i && styles.seasonTabActive]}>
-                    <Text style={[styles.seasonTabText, selectedSeason === i && styles.seasonTabTextActive]}>Season {season.number}</Text>
+                    <Text style={[styles.seasonTabText, selectedSeason === i && styles.seasonTabTextActive]}>
+                      Season {season.number} · {season.episodes?.length || 0} eps
+                    </Text>
                   </Pressable>
                 ))}
               </ScrollView>
-              {seasons[selectedSeason]?.episodes?.map((ep, index) => (
+              {normalizedSeasons[selectedSeason]?.episodes?.map((ep, index) => (
                 <Animated.View key={ep.id} entering={FadeInDown.delay(index * 40).duration(300)}>
                   <Pressable style={styles.episodeCard} onPress={() => handlePlayEpisode(ep.stream_url, ep.title, ep.stream_sources || [], ep.subtitle_url)}>
                     <View style={styles.episodeThumbnailWrap}>
@@ -565,7 +625,9 @@ export default function ContentDetailScreen() {
         <LinearGradient colors={['transparent', theme.background]} style={StyleSheet.absoluteFill} />
         <Pressable style={styles.stickyPlayBtn} onPress={handlePlay}>
           <MaterialIcons name="play-arrow" size={24} color="#000" />
-          <Text style={styles.stickyPlayText}>{sourcesLoading ? 'Loading sources...' : isMovie ? 'Play Movie' : 'Play S1 E1'}</Text>
+          <Text style={styles.stickyPlayText}>
+            {sourcesLoading ? 'Loading sources...' : isMovie ? 'Play Movie' : normalizedSeasons[selectedSeason]?.episodes?.[0] ? `Play S${normalizedSeasons[selectedSeason].number} E${normalizedSeasons[selectedSeason].episodes?.[0]?.number}` : 'Play Series'}
+          </Text>
         </Pressable>
       </Animated.View>
 
@@ -628,6 +690,7 @@ const styles = StyleSheet.create({
   infoBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4 },
   infoBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
   title: { fontSize: 28, fontWeight: '800', color: '#FFF', letterSpacing: -0.5, marginBottom: 10 },
+  originalTitle: { fontSize: 14, color: theme.textMuted, marginTop: -4, marginBottom: 12 },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
   ratingBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   ratingText: { fontSize: 15, fontWeight: '700', color: theme.accent },
@@ -644,6 +707,19 @@ const styles = StyleSheet.create({
   quickAction: { alignItems: 'center', gap: 6 },
   quickActionText: { fontSize: 11, fontWeight: '500', color: theme.textSecondary },
   description: { fontSize: 15, color: '#D1D5DB', lineHeight: 24, marginBottom: 20 },
+  detailsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
+  detailCard: {
+    width: '48%',
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  detailLabel: { fontSize: 11, fontWeight: '700', color: theme.textMuted, letterSpacing: 0.5, textTransform: 'uppercase' },
+  detailValue: { fontSize: 14, fontWeight: '700', color: '#FFF' },
   sectionLabel: { fontSize: 11, fontWeight: '700', color: theme.textMuted, letterSpacing: 1, marginBottom: 10 },
   castSection: { marginBottom: 20 },
   castList: { fontSize: 14, color: theme.textSecondary, lineHeight: 22 },

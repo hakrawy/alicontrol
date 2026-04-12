@@ -191,6 +191,7 @@ export interface Movie {
   type: 'movie';
   imdb_id?: string | null;
   tmdb_id?: string | null;
+  original_title?: string | null;
   title: string;
   description: string;
   poster: string;
@@ -212,6 +213,7 @@ export interface Movie {
   is_published: boolean;
   view_count: number;
   live_viewers?: number;
+  content_status?: string | null;
   category_id: string | null;
   created_at: string;
   updated_at: string;
@@ -222,6 +224,7 @@ export interface Series {
   type: 'series';
   imdb_id?: string | null;
   tmdb_id?: string | null;
+  original_title?: string | null;
   title: string;
   description: string;
   poster: string;
@@ -240,6 +243,8 @@ export interface Series {
   is_published: boolean;
   view_count: number;
   live_viewers?: number;
+  content_status?: string | null;
+  last_synced_at?: string | null;
   category_id: string | null;
   created_at: string;
   updated_at: string;
@@ -2149,10 +2154,23 @@ function normalizeMovie(movie: any): Movie {
   return {
     ...movie,
     type: 'movie',
+    original_title: movie?.original_title || null,
     stream_url: stream_sources[0]?.url || movie?.stream_url || '',
     stream_sources,
     live_viewers: movie?.live_viewers ?? 0,
+    content_status: movie?.content_status || 'released',
   } as Movie;
+}
+
+function normalizeSeries(series: any): Series {
+  return {
+    ...series,
+    type: 'series',
+    original_title: series?.original_title || null,
+    live_viewers: series?.live_viewers ?? 0,
+    content_status: series?.content_status || 'unknown',
+    last_synced_at: series?.last_synced_at || null,
+  } as Series;
 }
 
 function normalizeEpisode(episode: any): Episode {
@@ -2273,13 +2291,13 @@ export async function fetchSeries(opts?: { featured?: boolean; trending?: boolea
   query = query.order('view_count', { ascending: false });
   const { data, error } = await query;
   if (error) throw error;
-  return (data || []).map((s: any) => ({ ...s, type: 'series' as const, live_viewers: s?.live_viewers ?? 0 }));
+  return (data || []).map((s: any) => normalizeSeries(s));
 }
 
 export async function fetchSeriesById(id: string) {
   const { data, error } = await supabase.from('series').select('*').eq('id', id).single();
   if (error) throw error;
-  return { ...data, type: 'series' as const, live_viewers: data?.live_viewers ?? 0 } as Series;
+  return normalizeSeries(data);
 }
 
 export async function fetchSeasonsWithEpisodes(seriesId: string) {
@@ -2295,10 +2313,17 @@ export async function fetchSeasonsWithEpisodes(seriesId: string) {
     .eq('series_id', seriesId)
     .order('number');
   if (eErr) throw eErr;
-  return (seasons || []).map((s: any) => ({
-    ...s,
-    episodes: (episodes || []).filter((e: any) => e.season_id === s.id).map((e: any) => normalizeEpisode(e)),
-  })) as Season[];
+  return (seasons || [])
+    .slice()
+    .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+    .map((s: any) => ({
+      ...s,
+      episodes: (episodes || [])
+        .filter((e: any) => e.season_id === s.id)
+        .slice()
+        .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+        .map((e: any) => normalizeEpisode(e)),
+    })) as Season[];
 }
 
 // ===== CONTENT (COMBINED) =====
@@ -2311,7 +2336,7 @@ export async function fetchContentById(id: string): Promise<ContentItem | null> 
   const { data: movie } = await supabase.from('movies').select('*').eq('id', id).maybeSingle();
   if (movie) return normalizeMovie(movie);
   const { data: seriesItem } = await supabase.from('series').select('*').eq('id', id).maybeSingle();
-  if (seriesItem) return { ...seriesItem, type: 'series' as const, live_viewers: seriesItem?.live_viewers ?? 0 };
+  if (seriesItem) return normalizeSeries(seriesItem);
   return null;
 }
 
@@ -2323,7 +2348,7 @@ export async function searchContent(query: string) {
   ]);
   return [
     ...(moviesData || []).map((m: any) => normalizeMovie(m)),
-    ...(seriesData || []).map((s: any) => ({ ...s, type: 'series' as const, live_viewers: s?.live_viewers ?? 0 })),
+    ...(seriesData || []).map((s: any) => normalizeSeries(s)),
   ] as ContentItem[];
 }
 

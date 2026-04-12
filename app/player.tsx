@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, Text, Pressable, StyleSheet, Linking, Platform, ScrollView } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Linking, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -282,6 +282,7 @@ function WebDirectPlayer({
   const insets = useSafeAreaInsets();
   const [showControls, setShowControls] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -297,6 +298,11 @@ function WebDirectPlayer({
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
     controlsTimer.current = setTimeout(() => setShowControls(false), delay);
   }, []);
+
+  const showControlsTemporarily = useCallback((delay = 2500) => {
+    setShowControls(true);
+    scheduleControlsHide(delay);
+  }, [scheduleControlsHide]);
 
   useEffect(() => {
     setCaptionsEnabled(Boolean(subtitleUrl));
@@ -336,6 +342,7 @@ function WebDirectPlayer({
       hls.on(Events.ERROR, (_event, data) => {
         if (data?.fatal) {
           setPlaybackError('This HLS stream failed to load in the browser.');
+          setIsBuffering(false);
           onPlaybackFailure('fatal_hls_error');
         }
       });
@@ -350,15 +357,35 @@ function WebDirectPlayer({
     };
 
     const onLoadedMetadata = () => syncState();
-    const onCanPlay = () => scheduleControlsHide(1800);
+    const onCanPlay = () => {
+      setIsBuffering(false);
+      scheduleControlsHide(1200);
+    };
     const onTimeUpdate = () => syncState();
     const onPlay = () => {
       setIsPlaying(true);
-      scheduleControlsHide();
+      setIsBuffering(false);
+      scheduleControlsHide(1200);
     };
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      setIsPlaying(false);
+      setShowControls(true);
+    };
+    const onWaiting = () => {
+      setIsBuffering(true);
+      setShowControls(true);
+    };
+    const onSeeking = () => {
+      setIsBuffering(true);
+      setShowControls(true);
+    };
+    const onSeeked = () => {
+      setIsBuffering(false);
+      scheduleControlsHide(1000);
+    };
     const onError = () => {
       setPlaybackError('The browser could not play this source.');
+      setIsBuffering(false);
       onPlaybackFailure('html5_error');
     };
 
@@ -367,10 +394,14 @@ function WebDirectPlayer({
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
+    video.addEventListener('waiting', onWaiting);
+    video.addEventListener('seeking', onSeeking);
+    video.addEventListener('seeked', onSeeked);
     video.addEventListener('error', onError);
 
     void video.play().catch(() => {
       setIsPlaying(false);
+      setIsBuffering(false);
     });
 
     return () => {
@@ -379,6 +410,9 @@ function WebDirectPlayer({
       video.removeEventListener('timeupdate', onTimeUpdate);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('seeking', onSeeking);
+      video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('error', onError);
       if (hls) {
         hls.destroy();
@@ -408,8 +442,14 @@ function WebDirectPlayer({
   }, [captionsEnabled, subtitleUrl, url]);
 
   const toggleControls = useCallback(() => {
-    setShowControls((prev) => !prev);
-  }, []);
+    setShowControls((prev) => {
+      const next = !prev;
+      if (next && isPlaying) {
+        scheduleControlsHide(1600);
+      }
+      return next;
+    });
+  }, [isPlaying, scheduleControlsHide]);
 
   const togglePlay = useCallback(() => {
     Haptics.selectionAsync();
@@ -448,7 +488,12 @@ function WebDirectPlayer({
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <Pressable style={styles.videoContainer} onPress={toggleControls}>
+      <Pressable
+        style={styles.videoContainer}
+        onPress={toggleControls}
+        onHoverIn={() => showControlsTemporarily(1400)}
+        onPressIn={() => showControlsTemporarily(1800)}
+      >
         <video
           ref={videoRef}
           style={styles.webFrame as any}
@@ -468,6 +513,12 @@ function WebDirectPlayer({
             />
           ) : null}
         </video>
+        {isBuffering ? (
+          <View style={styles.bufferingWrap}>
+            <ActivityIndicator size="large" color="#FFF" />
+            <Text style={styles.bufferingText}>Optimizing playback…</Text>
+          </View>
+        ) : null}
       </Pressable>
 
       {showControls ? (
@@ -787,12 +838,22 @@ function DashPlayer({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [showSourcesPanel, setShowSourcesPanel] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dashHtml = buildDashPlayerHtml(url);
+
+  useEffect(() => {
+    if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    controlsTimer.current = setTimeout(() => setShowControls(false), 2000);
+    return () => {
+      if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    };
+  }, [selectedSourceIndex]);
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <View style={styles.videoContainer}>
+      <Pressable style={styles.videoContainer} onPress={() => setShowControls((prev) => !prev)}>
         {Platform.OS === 'web' ? (
           <iframe
             srcDoc={dashHtml}
@@ -810,8 +871,9 @@ function DashPlayer({
             mediaPlaybackRequiresUserAction={false}
           />
         )}
-      </View>
-      <Animated.View entering={FadeIn.duration(200)} style={[styles.controlsOverlay, styles.embeddedOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      </Pressable>
+      {showControls ? (
+      <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={[styles.controlsOverlay, styles.embeddedOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <View style={styles.topBar}>
           <Pressable style={styles.backButton} onPress={() => router.back()}>
             <MaterialIcons name="arrow-back" size={24} color="#FFF" />
@@ -832,6 +894,7 @@ function DashPlayer({
           </View>
         ) : null}
       </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -856,11 +919,21 @@ function EmbeddedPlayer({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [showSourcesPanel, setShowSourcesPanel] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    controlsTimer.current = setTimeout(() => setShowControls(false), 2200);
+    return () => {
+      if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    };
+  }, [selectedSourceIndex]);
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <View style={styles.videoContainer}>
+      <Pressable style={styles.videoContainer} onPress={() => setShowControls((prev) => !prev)}>
         {Platform.OS === 'web' ? (
           <iframe
             src={embedUrl}
@@ -880,9 +953,10 @@ function EmbeddedPlayer({
             allowsInlineMediaPlayback
           />
         )}
-      </View>
+      </Pressable>
 
-      <Animated.View entering={FadeIn.duration(200)} style={[styles.controlsOverlay, styles.embeddedOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      {showControls ? (
+      <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={[styles.controlsOverlay, styles.embeddedOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <View style={styles.topBar}>
           <Pressable style={styles.backButton} onPress={() => router.back()}>
             <MaterialIcons name="arrow-back" size={24} color="#FFF" />
@@ -911,6 +985,7 @@ function EmbeddedPlayer({
           </Text>
         </View>
       </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -1217,5 +1292,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#FFF',
+  },
+  bufferingWrap: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -80 }, { translateY: -26 }],
+    minWidth: 160,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  bufferingText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
