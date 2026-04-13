@@ -9,10 +9,12 @@ import * as Haptics from 'expo-haptics';
 import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
 import type { TMDBSearchResult } from '../../services/api';
+import { useLocale } from '../../contexts/LocaleContext';
 
 export default function AdminImports() {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
+  const { language, direction, isRTL } = useLocale();
   const [query, setQuery] = useState('');
   const [tmdbId, setTmdbId] = useState('');
   const [mediaType, setMediaType] = useState<'movie' | 'tv'>('movie');
@@ -22,11 +24,63 @@ export default function AdminImports() {
   const [preview, setPreview] = useState<any | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
 
+  const copy = language === 'Arabic'
+    ? {
+        section: 'استيراد TMDB',
+        movie: 'أفلام',
+        series: 'مسلسلات',
+        adult: 'استيراد إلى مكتبة +18',
+        adultDesc: 'سيتم عزل هذا المحتوى عن المكتبة العامة.',
+        searchByTitle: 'البحث بالعنوان',
+        searchPlaceholder: 'ابحث في TMDB',
+        search: 'بحث',
+        importById: 'استيراد عبر TMDB ID',
+        idPlaceholder: 'أدخل TMDB ID',
+        fetch: 'جلب البيانات',
+        save: 'حفظ',
+        requiredSearch: 'البحث مطلوب',
+        requiredSearchDesc: 'أدخل عنوانًا للبحث في TMDB.',
+        requiredId: 'TMDB ID مطلوب',
+        requiredIdDesc: 'أدخل TMDB ID أولًا.',
+        tmdbError: 'خطأ TMDB',
+        saveFailed: 'فشل الحفظ',
+        saveFailedDesc: 'تعذر حفظ المحتوى المحدد.',
+        saved: 'تم الحفظ',
+        savedDesc: 'تم استيراد المحتوى ودمجه بنجاح.',
+        results: 'النتائج',
+        noOverview: 'لا يوجد وصف متاح.',
+      }
+    : {
+        section: 'TMDB IMPORT',
+        movie: 'Movies',
+        series: 'Series',
+        adult: 'Import into +18 library',
+        adultDesc: 'Imported item will be isolated from the public library.',
+        searchByTitle: 'Search by title',
+        searchPlaceholder: 'Search title on TMDB',
+        search: 'Search',
+        importById: 'Import by TMDB ID',
+        idPlaceholder: 'Enter TMDB ID',
+        fetch: 'Fetch',
+        save: 'Save',
+        requiredSearch: 'Search required',
+        requiredSearchDesc: 'Enter a title to search on TMDB.',
+        requiredId: 'TMDB ID required',
+        requiredIdDesc: 'Enter a TMDB ID first.',
+        tmdbError: 'TMDB error',
+        saveFailed: 'Save failed',
+        saveFailedDesc: 'Could not save the selected content.',
+        saved: 'Saved',
+        savedDesc: 'The content has been imported and merged successfully.',
+        results: 'RESULTS',
+        noOverview: 'No overview available.',
+      };
+
   const filteredResults = useMemo(() => results.filter(Boolean), [results]);
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      showAlert('Search required', 'Enter a title to search on TMDB.');
+      showAlert(copy.requiredSearch, copy.requiredSearchDesc);
       return;
     }
 
@@ -36,7 +90,7 @@ export default function AdminImports() {
       setResults(data);
       setPreview(null);
     } catch (err: any) {
-      showAlert('TMDB error', err.message || 'Failed to search TMDB.');
+      showAlert(copy.tmdbError, err.message || 'Failed to search TMDB.');
     } finally {
       setLoading(false);
     }
@@ -44,7 +98,7 @@ export default function AdminImports() {
 
   const handleFetchById = async () => {
     if (!tmdbId.trim()) {
-      showAlert('TMDB ID required', 'Enter a TMDB ID first.');
+      showAlert(copy.requiredId, copy.requiredIdDesc);
       return;
     }
 
@@ -53,7 +107,7 @@ export default function AdminImports() {
       const data = await api.fetchTMDBMetadataById(tmdbId.trim(), mediaType);
       setPreview(data);
     } catch (err: any) {
-      showAlert('TMDB error', err.message || 'Failed to fetch TMDB metadata.');
+      showAlert(copy.tmdbError, err.message || 'Failed to fetch TMDB metadata.');
     } finally {
       setLoading(false);
     }
@@ -64,31 +118,31 @@ export default function AdminImports() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     try {
       await api.importTMDBContentById(targetId, mediaType, { isAdult: adultTarget });
-      showAlert('Saved', 'The content has been imported and merged successfully.');
+      showAlert(copy.saved, copy.savedDesc);
     } catch (err: any) {
-      showAlert('Save failed', err.message || 'Could not save the selected content.');
+      showAlert(copy.saveFailed, err.message || copy.saveFailedDesc);
     } finally {
       setSavingId(null);
     }
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false}>
-      <Text style={styles.sectionTitle}>TMDB IMPORT</Text>
+    <ScrollView style={[styles.container, { direction }]} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false}>
+      <Text style={styles.sectionTitle}>{copy.section}</Text>
 
       <View style={styles.typeRow}>
         <Pressable style={[styles.typeChip, mediaType === 'movie' && styles.typeChipActive]} onPress={() => setMediaType('movie')}>
-          <Text style={[styles.typeChipText, mediaType === 'movie' && styles.typeChipTextActive]}>Movies</Text>
+          <Text style={[styles.typeChipText, mediaType === 'movie' && styles.typeChipTextActive]}>{copy.movie}</Text>
         </Pressable>
         <Pressable style={[styles.typeChip, mediaType === 'tv' && styles.typeChipActive]} onPress={() => setMediaType('tv')}>
-          <Text style={[styles.typeChipText, mediaType === 'tv' && styles.typeChipTextActive]}>Series</Text>
+          <Text style={[styles.typeChipText, mediaType === 'tv' && styles.typeChipTextActive]}>{copy.series}</Text>
         </Pressable>
       </View>
 
       <View style={styles.switchRow}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.switchTitle}>Import into +18 library</Text>
-          <Text style={styles.switchDesc}>Imported item will be isolated from the public library.</Text>
+          <Text style={styles.switchTitle}>{copy.adult}</Text>
+          <Text style={styles.switchDesc}>{copy.adultDesc}</Text>
         </View>
         <Switch
           value={adultTarget}
@@ -99,36 +153,38 @@ export default function AdminImports() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Search by title</Text>
+        <Text style={styles.cardTitle}>{copy.searchByTitle}</Text>
         <View style={styles.searchRow}>
           <TextInput
             style={styles.input}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search title on TMDB"
+            placeholder={copy.searchPlaceholder}
             placeholderTextColor={theme.textMuted}
+            textAlign={isRTL ? 'right' : 'left'}
           />
           <Pressable style={styles.primaryBtn} onPress={handleSearch}>
             <MaterialIcons name="search" size={18} color="#FFF" />
-            <Text style={styles.primaryBtnText}>Search</Text>
+            <Text style={styles.primaryBtnText}>{copy.search}</Text>
           </Pressable>
         </View>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Import by TMDB ID</Text>
+        <Text style={styles.cardTitle}>{copy.importById}</Text>
         <View style={styles.searchRow}>
           <TextInput
             style={styles.input}
             value={tmdbId}
             onChangeText={setTmdbId}
             keyboardType="number-pad"
-            placeholder="Enter TMDB ID"
+            placeholder={copy.idPlaceholder}
             placeholderTextColor={theme.textMuted}
+            textAlign={isRTL ? 'right' : 'left'}
           />
           <Pressable style={styles.primaryBtn} onPress={handleFetchById}>
             <MaterialIcons name="cloud-download" size={18} color="#FFF" />
-            <Text style={styles.primaryBtnText}>Fetch</Text>
+            <Text style={styles.primaryBtnText}>{copy.fetch}</Text>
           </Pressable>
         </View>
       </View>
@@ -145,7 +201,7 @@ export default function AdminImports() {
             <Text style={styles.previewText} numberOfLines={4}>{preview.description || 'No overview available.'}</Text>
             <Pressable style={[styles.primaryBtn, { alignSelf: 'flex-start', marginTop: 12 }]} onPress={() => handleSave(preview.tmdb_id)}>
               <MaterialIcons name="save" size={18} color="#FFF" />
-              <Text style={styles.primaryBtnText}>Save</Text>
+              <Text style={styles.primaryBtnText}>{copy.save}</Text>
             </Pressable>
           </View>
         </Animated.View>
@@ -153,7 +209,7 @@ export default function AdminImports() {
 
       {filteredResults.length > 0 ? (
         <>
-          <Text style={styles.sectionTitle}>RESULTS</Text>
+          <Text style={styles.sectionTitle}>{copy.results}</Text>
           {filteredResults.map((item, index) => (
             <Animated.View key={`${item.media_type}-${item.id}`} entering={FadeInDown.delay(index * 40).duration(220)}>
               <View style={styles.resultCard}>
@@ -162,7 +218,7 @@ export default function AdminImports() {
                   <Text style={styles.resultTitle}>{item.title}</Text>
                   <Text style={styles.resultMeta}>{item.original_title || item.title}</Text>
                   <Text style={styles.resultMeta}>{item.release_date?.slice(0, 4) || 'N/A'} • {item.rating}</Text>
-                  <Text style={styles.resultOverview} numberOfLines={3}>{item.overview || 'No overview available.'}</Text>
+                  <Text style={styles.resultOverview} numberOfLines={3}>{item.overview || copy.noOverview}</Text>
                 </View>
                 <Pressable style={styles.inlineSaveBtn} onPress={() => handleSave(item.id)} disabled={savingId === item.id}>
                   {savingId === item.id ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialIcons name="save" size={18} color="#FFF" />}

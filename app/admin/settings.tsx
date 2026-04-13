@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
+import { useLocale } from '../../contexts/LocaleContext';
 
 const defaultSettings: { key: string; label: string; icon: string; type: 'text' | 'toggle'; description?: string; placeholder?: string }[] = [
   { key: 'app_name', label: 'App Name', icon: 'apps', type: 'text', placeholder: 'StreamControl' },
@@ -23,6 +24,7 @@ const defaultSettings: { key: string; label: string; icon: string; type: 'text' 
 export default function AdminSettings() {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
+  const { language, direction } = useLocale();
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export default function AdminSettings() {
       await api.upsertAppSetting(key, value);
     } catch {
       setSettings(p => ({ ...p, [key]: prev }));
-      showAlert('Error', 'Failed to update setting');
+      showAlert(copy.error, copy.updateFailed);
     }
     setSaving(null);
   };
@@ -52,8 +54,8 @@ export default function AdminSettings() {
   const toggleSettings = defaultSettings.filter(s => s.type === 'toggle');
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false}>
-      <Text style={styles.sectionTitle}>GENERAL</Text>
+    <ScrollView style={[styles.container, { direction }]} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false}>
+      <Text style={styles.sectionTitle}>{copy.general}</Text>
       {textSettings.map((s, i) => (
         <Animated.View key={s.key} entering={FadeInDown.delay(i * 60).duration(300)}>
           <View style={styles.settingCard}>
@@ -74,7 +76,7 @@ export default function AdminSettings() {
         </Animated.View>
       ))}
 
-      <Text style={styles.sectionTitle}>FEATURES</Text>
+      <Text style={styles.sectionTitle}>{copy.features}</Text>
       {toggleSettings.map((s, i) => (
         <Animated.View key={s.key} entering={FadeInDown.delay(200 + i * 60).duration(300)}>
           <View style={styles.toggleCard}>
@@ -93,18 +95,18 @@ export default function AdminSettings() {
         </Animated.View>
       ))}
 
-      <Text style={styles.sectionTitle}>INFO</Text>
+      <Text style={styles.sectionTitle}>{copy.info}</Text>
       <View style={styles.infoCard}>
         <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Platform</Text>
+          <Text style={styles.infoLabel}>{copy.platform}</Text>
           <Text style={styles.infoValue}>OnSpace Cloud</Text>
         </View>
         <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>App Version</Text>
+          <Text style={styles.infoLabel}>{copy.version}</Text>
           <Text style={styles.infoValue}>2.0.0</Text>
         </View>
         <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Settings Count</Text>
+          <Text style={styles.infoLabel}>{copy.count}</Text>
           <Text style={styles.infoValue}>{Object.keys(settings).length}</Text>
         </View>
       </View>
@@ -126,3 +128,24 @@ const styles = StyleSheet.create({
   infoLabel: { fontSize: 14, color: theme.textSecondary },
   infoValue: { fontSize: 14, fontWeight: '600', color: '#FFF' },
 });
+  const copy = language === 'Arabic'
+    ? {
+        general: 'عام',
+        features: 'الخصائص',
+        info: 'معلومات',
+        error: 'خطأ',
+        updateFailed: 'فشل تحديث الإعداد',
+        platform: 'المنصة',
+        version: 'إصدار التطبيق',
+        count: 'عدد الإعدادات',
+      }
+    : {
+        general: 'GENERAL',
+        features: 'FEATURES',
+        info: 'INFO',
+        error: 'Error',
+        updateFailed: 'Failed to update setting',
+        platform: 'Platform',
+        version: 'App Version',
+        count: 'Settings Count',
+      };
