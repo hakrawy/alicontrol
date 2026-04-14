@@ -512,8 +512,13 @@ function WebDirectPlayer({
 
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const progressTrackRef = useRef<View | null>(null);
   const activeSource = sources[selectedSourceIndex];
   const didApplyResumeRef = useRef(false);
+  // Prevents button clicks from propagating up to the video tap Pressable
+  const ignoreNextToggleRef = useRef(false);
+  // Tracks whether any popup menu is open to prevent auto-hiding controls
+  const anyMenuOpenRef = useRef(false);
 
   // Build all subtitle tracks
   const allSubtitleTracks = [
@@ -524,7 +529,10 @@ function WebDirectPlayer({
 
   const scheduleControlsHide = useCallback((delay = 3000) => {
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
-    controlsTimer.current = setTimeout(() => setShowControls(false), delay);
+    controlsTimer.current = setTimeout(() => {
+      // Don't hide controls while a menu is open
+      if (!anyMenuOpenRef.current) setShowControls(false);
+    }, delay);
   }, []);
 
   const showControlsTemporarily = useCallback((delay = 3000) => {
@@ -692,13 +700,27 @@ function WebDirectPlayer({
     }
   }, []);
 
+  // Keep anyMenuOpenRef in sync with menu state
+  useEffect(() => {
+    anyMenuOpenRef.current = showSettingsMenu || showSpeedMenu || showSourcesPanel;
+  }, [showSettingsMenu, showSpeedMenu, showSourcesPanel]);
+
   const toggleControls = useCallback(() => {
+    // Ignore this call if a button just set the flag (prevents propagation bugs)
+    if (ignoreNextToggleRef.current) {
+      ignoreNextToggleRef.current = false;
+      return;
+    }
+    // Don't toggle away when a menu is open — just close the menus instead
+    if (anyMenuOpenRef.current) {
+      setShowSpeedMenu(false);
+      setShowSettingsMenu(false);
+      return;
+    }
     setShowControls((prev) => {
       if (!prev && isPlaying) scheduleControlsHide(1800);
       return !prev;
     });
-    setShowSpeedMenu(false);
-    setShowSettingsMenu(false);
   }, [isPlaying, scheduleControlsHide]);
 
   const togglePlay = useCallback(() => {
@@ -763,10 +785,50 @@ function WebDirectPlayer({
   const isLiveStream = duration <= 0;
   const volumeIcon = isMuted || volume === 0 ? 'volume-off' : volume < 0.5 ? 'volume-down' : 'volume-up';
 
+  // Robust seek from mouse/touch event on the progress track
+  const seekFromEvent = useCallback((clientX: number) => {
+    const el = progressTrackRef.current as any;
+    if (Platform.OS === 'web' && el?.getBoundingClientRect) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0) {
+        seekToRatio(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)));
+        return;
+      }
+    }
+    // Fallback: use progressTrackWidth from onLayout
+    seekToRatio(Math.max(0, Math.min(1, clientX / progressTrackWidth)));
+  }, [progressTrackRef, progressTrackWidth, seekToRatio]);
+
+  // Web drag-to-seek on progress bar
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const el = progressTrackRef.current as any;
+    if (!el) return;
+    let dragging = false;
+    const onMouseDown = (e: MouseEvent) => {
+      dragging = true;
+      seekFromEvent(e.clientX);
+      showControlsTemporarily(3000);
+      e.preventDefault();
+    };
+    const onMouseMove = (e: MouseEvent) => { if (dragging) { seekFromEvent(e.clientX); } };
+    const onMouseUp = () => { dragging = false; };
+    el.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    return () => {
+      el.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekFromEvent, showControlsTemporarily]);
+
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <Pressable style={styles.videoContainer} onPress={toggleControls}>
+      {/* Video element — plain View, tap handled by overlay below */}
+      <View style={styles.videoContainer}>
         <video
           ref={videoRef}
           style={styles.webFrame as any}
@@ -793,7 +855,13 @@ function WebDirectPlayer({
             <Text style={styles.bufferingText}>جارٍ التحميل…</Text>
           </View>
         )}
-      </Pressable>
+      </View>
+
+      {/* Full-screen tap area — sits BELOW the controls overlay */}
+      <Pressable
+        style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}
+        onPress={toggleControls}
+      />
 
       {/* Quality bar at top (HLS) */}
       {showControls && hlsLevels.length > 0 && (
@@ -806,7 +874,10 @@ function WebDirectPlayer({
         <Animated.View
           entering={FadeIn.duration(200)}
           exiting={FadeOut.duration(200)}
-          style={[styles.controlsOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+          // box-none: the container itself passes taps through to the tap Pressable below,
+          // but child Views/Pressables still receive events normally.
+          pointerEvents="box-none"
+          style={[styles.controlsOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom, zIndex: 10 }]}
         >
           {/* TOP BAR */}
           <View style={styles.topBar}>
@@ -822,6 +893,10 @@ function WebDirectPlayer({
             <Pressable
               style={[styles.topBarBtn, showSettingsMenu && styles.topBarBtnActive]}
               onPress={() => {
+                // Set ignore flag BEFORE state update so toggleControls propagation is blocked
+                ignoreNextToggleRef.current = true;
+                // Cancel hide timer so controls stay visible
+                if (controlsTimer.current) clearTimeout(controlsTimer.current);
                 Haptics.selectionAsync();
                 setShowSettingsMenu((v) => !v);
                 setShowSpeedMenu(false);
@@ -853,17 +928,17 @@ function WebDirectPlayer({
           <View style={styles.centerControls}>
             <Pressable
               style={[styles.seekBtn, isLiveStream && styles.disabledControl]}
-              onPress={() => seek(-10)}
+              onPress={() => { ignoreNextToggleRef.current = true; seek(-10); }}
               disabled={isLiveStream}
             >
               <MaterialIcons name="replay-10" size={34} color="#FFF" />
             </Pressable>
-            <Pressable style={styles.playPauseBtn} onPress={togglePlay}>
+            <Pressable style={styles.playPauseBtn} onPress={() => { ignoreNextToggleRef.current = true; togglePlay(); }}>
               <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={44} color="#FFF" />
             </Pressable>
             <Pressable
               style={[styles.seekBtn, isLiveStream && styles.disabledControl]}
-              onPress={() => seek(10)}
+              onPress={() => { ignoreNextToggleRef.current = true; seek(10); }}
               disabled={isLiveStream}
             >
               <MaterialIcons name="forward-10" size={34} color="#FFF" />
@@ -889,20 +964,18 @@ function WebDirectPlayer({
 
             {!isLiveStream ? (
               <>
-                {/* Progress bar */}
+                {/* Progress bar — uses ref + getBoundingClientRect for reliable web seeking
+                     Drag is handled by the useEffect above (mousedown/mousemove/mouseup) */}
                 <View style={styles.progressContainer}>
-                  <Pressable
+                  <View
+                    ref={progressTrackRef as any}
                     style={styles.progressTrack}
                     onLayout={(e) => setProgressTrackWidth(e.nativeEvent.layout.width)}
-                    onPress={(e) => {
-                      if (!progressTrackWidth) return;
-                      seekToRatio(e.nativeEvent.locationX / progressTrackWidth);
-                    }}
                   >
                     <View style={styles.progressBuffer} />
                     <View style={[styles.progressFill, { width: `${progress}%` as any }]} />
                     <View style={[styles.progressThumb, { left: `${progress}%` as any }]} />
-                  </Pressable>
+                  </View>
                 </View>
 
                 {/* Time + Volume + Fullscreen row */}
@@ -915,8 +988,8 @@ function WebDirectPlayer({
 
                   {/* Volume */}
                   <Pressable
-                    onPress={() => { toggleMute(); }}
-                    onLongPress={() => setShowVolumeSlider((v) => !v)}
+                    onPress={() => { ignoreNextToggleRef.current = true; toggleMute(); }}
+                    onLongPress={() => { ignoreNextToggleRef.current = true; setShowVolumeSlider((v) => !v); }}
                     style={styles.bottomIconBtn}
                   >
                     <MaterialIcons name={volumeIcon} size={20} color="#FFF" />
@@ -927,8 +1000,9 @@ function WebDirectPlayer({
                       style={styles.volumeTrack}
                       onLayout={(e) => setVolumeTrackWidth(e.nativeEvent.layout.width)}
                       onPress={(e) => {
-                        if (!volumeTrackWidth) return;
-                        setVideoVolume(e.nativeEvent.locationX / volumeTrackWidth);
+                        ignoreNextToggleRef.current = true;
+                        const ratio = volumeTrackWidth > 0 ? (e.nativeEvent.locationX / volumeTrackWidth) : 0;
+                        setVideoVolume(ratio);
                         showControlsTemporarily(2000);
                       }}
                     >
@@ -939,7 +1013,7 @@ function WebDirectPlayer({
                   {/* Speed badge */}
                   <Pressable
                     style={styles.speedBadge}
-                    onPress={() => { setShowSpeedMenu((v) => !v); setShowSettingsMenu(false); }}
+                    onPress={() => { ignoreNextToggleRef.current = true; if (controlsTimer.current) clearTimeout(controlsTimer.current); setShowSpeedMenu((v) => !v); setShowSettingsMenu(false); }}
                   >
                     <Text style={styles.speedBadgeText}>{playbackSpeed}x</Text>
                   </Pressable>
@@ -948,14 +1022,14 @@ function WebDirectPlayer({
                   {allSubtitleTracks.length > 0 && (
                     <Pressable
                       style={[styles.bottomIconBtn, activeSubtitleIndex !== null && styles.bottomIconBtnActive]}
-                      onPress={() => setShowSubtitleSheet(true)}
+                      onPress={() => { ignoreNextToggleRef.current = true; setShowSubtitleSheet(true); }}
                     >
                       <MaterialIcons name="subtitles" size={20} color={activeSubtitleIndex !== null ? theme.primary : '#FFF'} />
                     </Pressable>
                   )}
 
                   {/* Fullscreen */}
-                  <Pressable style={styles.bottomIconBtn} onPress={toggleFullscreen}>
+                  <Pressable style={styles.bottomIconBtn} onPress={() => { ignoreNextToggleRef.current = true; toggleFullscreen(); }}>
                     <MaterialIcons name="fullscreen" size={22} color="#FFF" />
                   </Pressable>
                 </View>
