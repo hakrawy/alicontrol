@@ -800,30 +800,13 @@ function WebDirectPlayer({
     seekToRatio(Math.max(0, Math.min(1, clientX / progressTrackWidth)));
   }, [progressTrackRef, progressTrackWidth, seekToRatio]);
 
-  // Web drag-to-seek on progress bar
+  // Web drag-to-seek is now handled by the native <input type="range"> element.
+  // The useEffect below is kept only for non-web platforms that might use this component.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
-    const el = progressTrackRef.current as any;
-    if (!el) return;
-    let dragging = false;
-    const onMouseDown = (e: MouseEvent) => {
-      dragging = true;
-      seekFromEvent(e.clientX);
-      showControlsTemporarily(3000);
-      e.preventDefault();
-    };
-    const onMouseMove = (e: MouseEvent) => { if (dragging) { seekFromEvent(e.clientX); } };
-    const onMouseUp = () => { dragging = false; };
-    el.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-    return () => {
-      el.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
+    // No-op on web — seeking is handled by the <input type="range"> onChange
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seekFromEvent, showControlsTemporarily]);
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -963,20 +946,79 @@ function WebDirectPlayer({
               </Pressable>
             )}
 
-            {!isLiveStream ? (
-              <>
-                {/* Progress bar — uses ref + getBoundingClientRect for reliable web seeking
-                     Drag is handled by the useEffect above (mousedown/mousemove/mouseup) */}
+                {/* Progress bar — native range input on web for reliable drag-to-seek */}
                 <View style={styles.progressContainer}>
-                  <View
-                    ref={progressTrackRef as any}
-                    style={styles.progressTrack}
-                    onLayout={(e) => setProgressTrackWidth(e.nativeEvent.layout.width)}
-                  >
-                    <View style={styles.progressBuffer} />
-                    <View style={[styles.progressFill, { width: `${progress}%` as any }]} />
-                    <View style={[styles.progressThumb, { left: `${progress}%` as any }]} />
-                  </View>
+                  {Platform.OS === 'web' ? (
+                    // Native HTML range input: lives at zIndex 6 (above the zIndex-5 tap Pressable)
+                    // so mouse events reach it directly without any getBoundingClientRect tricks.
+                    <>
+                      <style>{`
+                        .ag-seek-range {
+                          -webkit-appearance: none;
+                          appearance: none;
+                          width: 100%;
+                          height: 4px;
+                          border-radius: 2px;
+                          background: linear-gradient(
+                            to right,
+                            #6366F1 0%,
+                            #6366F1 ${progress}%,
+                            rgba(255,255,255,0.25) ${progress}%,
+                            rgba(255,255,255,0.25) 100%
+                          );
+                          cursor: pointer;
+                          outline: none;
+                          position: relative;
+                          z-index: 6;
+                        }
+                        .ag-seek-range::-webkit-slider-thumb {
+                          -webkit-appearance: none;
+                          width: 14px;
+                          height: 14px;
+                          border-radius: 50%;
+                          background: #fff;
+                          box-shadow: 0 0 4px rgba(0,0,0,0.5);
+                          cursor: pointer;
+                          transition: transform 0.12s;
+                        }
+                        .ag-seek-range:hover::-webkit-slider-thumb {
+                          transform: scale(1.35);
+                        }
+                        .ag-seek-range::-moz-range-thumb {
+                          width: 14px;
+                          height: 14px;
+                          border-radius: 50%;
+                          background: #fff;
+                          border: none;
+                          cursor: pointer;
+                        }
+                      `}</style>
+                      <input
+                        type="range"
+                        className="ag-seek-range"
+                        min={0}
+                        max={100}
+                        step={0.1}
+                        value={progress}
+                        onChange={(e) => {
+                          seekToRatio(Number(e.target.value) / 100);
+                          showControlsTemporarily(2000);
+                        }}
+                        onMouseDown={() => showControlsTemporarily(5000)}
+                      />
+                    </>
+                  ) : (
+                    // Native mobile: keep the existing View-based track
+                    <View
+                      ref={progressTrackRef as any}
+                      style={styles.progressTrack}
+                      onLayout={(e) => setProgressTrackWidth(e.nativeEvent.layout.width)}
+                    >
+                      <View style={styles.progressBuffer} />
+                      <View style={[styles.progressFill, { width: `${progress}%` as any }]} />
+                      <View style={[styles.progressThumb, { left: `${progress}%` as any }]} />
+                    </View>
+                  )}
                 </View>
 
                 {/* Time + Volume + Fullscreen row */}
