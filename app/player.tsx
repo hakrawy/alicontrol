@@ -946,11 +946,11 @@ function WebDirectPlayer({
               </Pressable>
             )}
 
+            {!isLiveStream ? (
+              <>
                 {/* Progress bar — native range input on web for reliable drag-to-seek */}
                 <View style={styles.progressContainer}>
                   {Platform.OS === 'web' ? (
-                    // Native HTML range input: lives at zIndex 6 (above the zIndex-5 tap Pressable)
-                    // so mouse events reach it directly without any getBoundingClientRect tricks.
                     <>
                       <style>{`
                         .ag-seek-range {
@@ -1001,14 +1001,13 @@ function WebDirectPlayer({
                         step={0.1}
                         value={progress}
                         onChange={(e) => {
-                          seekToRatio(Number(e.target.value) / 100);
+                          seekToRatio(Number((e.target as HTMLInputElement).value) / 100);
                           showControlsTemporarily(2000);
                         }}
                         onMouseDown={() => showControlsTemporarily(5000)}
                       />
                     </>
                   ) : (
-                    // Native mobile: keep the existing View-based track
                     <View
                       ref={progressTrackRef as any}
                       style={styles.progressTrack}
@@ -1068,6 +1067,30 @@ function WebDirectPlayer({
                       onPress={() => { ignoreNextToggleRef.current = true; setShowSubtitleSheet(true); }}
                     >
                       <MaterialIcons name="subtitles" size={20} color={activeSubtitleIndex !== null ? theme.primary : '#FFF'} />
+                    </Pressable>
+                  )}
+
+                  {/* Fullscreen */}
+                  <Pressable style={styles.bottomIconBtn} onPress={() => { ignoreNextToggleRef.current = true; toggleFullscreen(); }}>
+                    <MaterialIcons name="fullscreen" size={22} color="#FFF" />
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <View style={styles.liveRow}>
+                <View style={styles.livePill}>
+                  <View style={styles.liveDotMini} />
+                  <Text style={styles.livePillText}>بث مباشر</Text>
+                </View>
+                <View style={{ flex: 1 }} />
+                <Pressable style={styles.bottomIconBtn} onPress={() => { toggleMute(); }}>
+                  <MaterialIcons name={volumeIcon} size={20} color="#FFF" />
+                </Pressable>
+                <Pressable style={styles.bottomIconBtn} onPress={toggleFullscreen}>
+                  <MaterialIcons name="fullscreen" size={22} color="#FFF" />
+                </Pressable>
+              </View>
+            )} size={20} color={activeSubtitleIndex !== null ? theme.primary : '#FFF'} />
                     </Pressable>
                   )}
 
