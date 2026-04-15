@@ -72,6 +72,20 @@ function getMediaKind(url: string): MediaKind {
   return 'web';
 }
 
+/** Detect if a URL is likely an HLS stream (manifest) */
+function isLikelyHLS(url: string): boolean {
+  try {
+    const lower = url.toLowerCase();
+    if (lower.includes('.m3u8')) return true;
+    // Common manifest/stream path patterns used by CDNs and streaming APIs
+    if (/\/(manifest|stream|live|hls|playlist|master|index)[\/\.\?]/i.test(lower)) return true;
+    if (/\/v1\/manifest/i.test(lower)) return true;
+    // URLs ending in /stream or /manifest without extension
+    if (/\/(stream|manifest|playlist|master)$/i.test(lower)) return true;
+    return false;
+  } catch { return false; }
+}
+
 function buildYouTubeEmbedUrl(url: string): string | null {
   const id = getYouTubeVideoId(url);
   if (!id) return null;
@@ -407,7 +421,7 @@ function WebDirectPlayer({
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     let hls: Hls | null = null;
-    if (Hls.isSupported() && (resolvedUrl.includes('.m3u8') || resolvedUrl.includes('/stream'))) {
+    if (Hls.isSupported() && isLikelyHLS(resolvedUrl)) {
       hls = new Hls({
         debug: false,
         enableWorker: true,
@@ -417,6 +431,15 @@ function WebDirectPlayer({
         maxBufferSize: 60 * 1000 * 1000,
         lowLatencyMode: false,
         backBufferLength: 30,
+        fragLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
+        fragLoadingRetryDelay: 1000,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        manifestLoadingRetryDelay: 1000,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 4,
+        levelLoadingRetryDelay: 1000,
       });
       hlsRef.current = hls;
       hls.loadSource(resolvedUrl);
@@ -427,7 +450,51 @@ function WebDirectPlayer({
       });
       hls.on(Events.LEVEL_SWITCHED, (_e: any, data: any) => setHlsCurrentLevel(data.level));
       hls.on(Events.ERROR, (_e: any, data: any) => {
-        if (data?.fatal) { setPlaybackError('فشل تحميل هذا البث.'); onPlaybackFailure('fatal_hls_error'); }
+        if (data?.fatal) {
+          // Auto-recovery: try switching levels or restarting before giving up
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.warn('[HLS] Network error, attempting recovery...');
+              hls?.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('[HLS] Media error, attempting recovery...');
+              hls?.recoverMediaError();
+              break;
+            default:
+              setPlaybackError('فشل تحميل هذا البث.');
+              onPlaybackFailure('fatal_hls_error');
+              break;
+          }
+        }
+      });
+    } else if (Hls.isSupported() && !resolvedUrl.match(/\.(mp4|webm|mov|m4v|ogg)$/i)) {
+      // Unknown format — try HLS first, fallback to direct
+      hls = new Hls({
+        debug: false,
+        enableWorker: true,
+        startLevel: -1,
+        maxBufferLength: 30,
+        manifestLoadingTimeOut: 8000,
+        manifestLoadingMaxRetry: 2,
+      });
+      hlsRef.current = hls;
+      hls.loadSource(resolvedUrl);
+      hls.attachMedia(video);
+      hls.on(Events.MANIFEST_PARSED, (_e: any, data: any) => {
+        setHlsLevels(data.levels.map((l: any, i: number) => ({ height: l.height || 0, bitrate: l.bitrate || 0, index: i })));
+        setHlsCurrentLevel(-1);
+      });
+      hls.on(Events.LEVEL_SWITCHED, (_e: any, data: any) => setHlsCurrentLevel(data.level));
+      hls.on(Events.ERROR, (_e: any, data: any) => {
+        if (data?.fatal) {
+          // HLS failed — fallback to direct video src
+          console.warn('[Player] HLS probe failed, falling back to direct source');
+          hls?.destroy();
+          hlsRef.current = null;
+          video.src = resolvedUrl;
+          void video.play().catch(() => {});
+        }
       });
     } else {
       video.src = resolvedUrl;
@@ -439,6 +506,9 @@ function WebDirectPlayer({
       }
       setIsBuffering(false);
       scheduleControlsHide(2500);
+    };
+    const onCanPlay = () => {
+      setIsBuffering(false);
     };
     const onTime = () => {
       const ct = video.currentTime || 0;
@@ -454,6 +524,7 @@ function WebDirectPlayer({
     const onVol = () => { setVolume(video.volume); setIsMuted(video.muted); };
 
     video.addEventListener('loadedmetadata', onLoaded);
+    video.addEventListener('canplay', onCanPlay);
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
@@ -466,6 +537,7 @@ function WebDirectPlayer({
 
     return () => {
       video.removeEventListener('loadedmetadata', onLoaded);
+      video.removeEventListener('canplay', onCanPlay);
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
