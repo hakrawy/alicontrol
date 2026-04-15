@@ -345,10 +345,12 @@ function WebDirectPlayer({
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anyMenuOpenRef = useRef(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [showControls, setShowControls] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -406,7 +408,16 @@ function WebDirectPlayer({
 
     let hls: Hls | null = null;
     if (Hls.isSupported() && (resolvedUrl.includes('.m3u8') || resolvedUrl.includes('/stream'))) {
-      hls = new Hls({ debug: false, enableWorker: true });
+      hls = new Hls({
+        debug: false,
+        enableWorker: true,
+        startLevel: -1,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000,
+        lowLatencyMode: false,
+        backBufferLength: 30,
+      });
       hlsRef.current = hls;
       hls.loadSource(resolvedUrl);
       hls.attachMedia(video);
@@ -509,10 +520,34 @@ function WebDirectPlayer({
   }, []);
 
   const toggleFullscreen = useCallback(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (document.fullscreenElement) document.exitFullscreen();
-    else v.requestFullscreen?.();
+    const doc = document as any;
+    const isFS = !!(doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement);
+    if (isFS) {
+      if (doc.exitFullscreen) doc.exitFullscreen();
+      else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+      else if (doc.msExitFullscreen) doc.msExitFullscreen();
+    } else {
+      const el = containerRef.current || document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if ((el as any).webkitRequestFullscreen) (el as any).webkitRequestFullscreen();
+      else if ((el as any).msRequestFullscreen) (el as any).msRequestFullscreen();
+      else if (videoRef.current && (videoRef.current as any).webkitEnterFullscreen) {
+        (videoRef.current as any).webkitEnterFullscreen();
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => {
+      const doc = document as any;
+      setIsFullscreen(!!(doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
   }, []);
 
   const changeHlsLevel = useCallback((i: number) => {
@@ -529,7 +564,7 @@ function WebDirectPlayer({
   }, [isPlaying, scheduleControlsHide]);
 
   return (
-    <View style={styles.container}>
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, backgroundColor: '#000', overflow: 'hidden' }}>
       <StatusBar hidden />
 
       {/* VIDEO ELEMENT */}
@@ -556,13 +591,6 @@ function WebDirectPlayer({
       {/* TAP OVERLAY */}
       <Pressable style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]} onPress={toggleControls} />
 
-      {/* QUALITY BAR */}
-      {showControls && hlsLevels.length > 0 && (
-        <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={[styles.qualityBarWrap, { top: insets.top + 4 }]}>
-          <QualityBar levels={hlsLevels} currentLevel={hlsCurrentLevel} onSelectLevel={changeHlsLevel} />
-        </Animated.View>
-      )}
-
       {/* CONTROLS OVERLAY */}
       {showControls && (
         <Animated.View
@@ -571,21 +599,28 @@ function WebDirectPlayer({
           pointerEvents="box-none"
           style={[styles.controlsOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom, zIndex: 10 }]}
         >
-          {/* TOP BAR */}
-          <View style={styles.topBar}>
-            <Pressable style={styles.backButton} onPress={() => { videoRef.current?.pause(); router.back(); }}>
-              <MaterialIcons name="arrow-back" size={22} color="#FFF" />
-            </Pressable>
-            <View style={styles.titleWrap}>
-              <Text style={styles.titleText} numberOfLines={1}>{title || 'جارٍ التشغيل'}</Text>
-              <Text style={styles.sourceStatusText}>{isLive ? '🔴 بث مباشر' : activeSource?.quality || 'تشغيل مباشر'}</Text>
+          {/* TOP SECTION: bar + quality */}
+          <View>
+            <View style={styles.topBar}>
+              <Pressable style={styles.backButton} onPress={() => { videoRef.current?.pause(); router.back(); }}>
+                <MaterialIcons name="arrow-back" size={22} color="#FFF" />
+              </Pressable>
+              <View style={styles.titleWrap}>
+                <Text style={styles.titleText} numberOfLines={1}>{title || 'جارٍ التشغيل'}</Text>
+                <Text style={styles.sourceStatusText}>{isLive ? '🔴 بث مباشر' : activeSource?.quality || 'تشغيل مباشر'}</Text>
+              </View>
+              <Pressable style={[styles.topBarBtn, showSettingsMenu && styles.topBarBtnActive]} onPress={() => { if (controlsTimer.current) clearTimeout(controlsTimer.current); setShowSettingsMenu((v) => !v); setShowSpeedMenu(false); }}>
+                <MaterialIcons name="more-vert" size={22} color="#FFF" />
+              </Pressable>
+              <Pressable style={[styles.topBarBtn, showSourcesPanel && styles.topBarBtnActive]} onPress={() => { if (controlsTimer.current) clearTimeout(controlsTimer.current); setShowSourcesPanel((v) => !v); }}>
+                <MaterialIcons name="layers" size={22} color="#FFF" />
+              </Pressable>
             </View>
-            <Pressable style={[styles.topBarBtn, showSettingsMenu && styles.topBarBtnActive]} onPress={() => { if (controlsTimer.current) clearTimeout(controlsTimer.current); setShowSettingsMenu((v) => !v); setShowSpeedMenu(false); }}>
-              <MaterialIcons name="more-vert" size={22} color="#FFF" />
-            </Pressable>
-            <Pressable style={[styles.topBarBtn, showSourcesPanel && styles.topBarBtnActive]} onPress={() => { if (controlsTimer.current) clearTimeout(controlsTimer.current); setShowSourcesPanel((v) => !v); }}>
-              <MaterialIcons name="layers" size={22} color="#FFF" />
-            </Pressable>
+            {hlsLevels.length > 0 && (
+              <View style={styles.qualityBarInline}>
+                <QualityBar levels={hlsLevels} currentLevel={hlsCurrentLevel} onSelectLevel={changeHlsLevel} />
+              </View>
+            )}
           </View>
 
           {showSettingsMenu && (
@@ -672,7 +707,7 @@ function WebDirectPlayer({
                     </Pressable>
                   )}
                   <Pressable style={styles.bottomIconBtn} onPress={toggleFullscreen}>
-                    <MaterialIcons name="fullscreen" size={22} color="#FFF" />
+                    <MaterialIcons name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} size={22} color="#FFF" />
                   </Pressable>
                 </View>
               </>
@@ -687,7 +722,7 @@ function WebDirectPlayer({
                   <MaterialIcons name={volIcon} size={20} color="#FFF" />
                 </Pressable>
                 <Pressable style={styles.bottomIconBtn} onPress={toggleFullscreen}>
-                  <MaterialIcons name="fullscreen" size={22} color="#FFF" />
+                  <MaterialIcons name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} size={22} color="#FFF" />
                 </Pressable>
               </View>
             )}
@@ -709,7 +744,7 @@ function WebDirectPlayer({
         onSave={async (v) => { try { await AsyncStorage.setItem(PROXY_KEY, v); } catch {} }}
         onClose={() => setShowProxySheet(false)}
       />
-    </View>
+    </div>
   );
 }
 
@@ -1086,16 +1121,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   topBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  backButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  titleWrap: { flex: 1 },
-  titleText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-  sourceStatusText: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 1 },
-  topBarBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  topBarBtnActive: { backgroundColor: 'rgba(99,102,241,0.25)' },
+  backButton: {
+    width: 38, height: 38, alignItems: 'center', justifyContent: 'center',
+    borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  titleWrap: { flex: 1, paddingHorizontal: 6 },
+  titleText: { fontSize: 14, fontWeight: '700', color: '#FFF', letterSpacing: -0.2 },
+  sourceStatusText: { fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  topBarBtn: {
+    width: 36, height: 36, alignItems: 'center', justifyContent: 'center',
+    borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  topBarBtnActive: { backgroundColor: 'rgba(99,102,241,0.3)' },
+  qualityBarInline: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
   centerControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28 },
   seekBtn: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center' },
   playPauseBtn: {
@@ -1105,7 +1150,7 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
   },
   disabledControl: { opacity: 0.3 },
-  bottomBar: { paddingHorizontal: 14, paddingBottom: 8, gap: 6, backgroundColor: 'rgba(0,0,0,0.45)' },
+  bottomBar: { paddingHorizontal: 14, paddingBottom: 10, gap: 6, backgroundColor: 'rgba(0,0,0,0.55)' },
   progressContainer: { width: '100%', paddingVertical: 4 },
   progressTrack: { width: '100%', height: 4, backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 2, overflow: 'visible' },
   progressBuffer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 2 },
@@ -1116,22 +1161,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
     transform: [{ translateX: -7 }],
   },
-  bottomControlRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  timeText: { fontSize: 13, fontWeight: '600', color: '#FFF' },
-  timeSeparator: { fontSize: 13, color: 'rgba(255,255,255,0.5)' },
-  timeDuration: { fontSize: 13, color: 'rgba(255,255,255,0.7)' },
-  bottomIconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 6 },
+  bottomControlRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  timeText: { fontSize: 12, fontWeight: '600', color: '#FFF' },
+  timeSeparator: { fontSize: 12, color: 'rgba(255,255,255,0.5)' },
+  timeDuration: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
+  bottomIconBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 6 },
   bottomIconBtnActive: { backgroundColor: 'rgba(99,102,241,0.3)' },
   volumeTrack: { height: 28, width: 80, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 4, overflow: 'hidden' },
   volumeFill: { position: 'absolute', top: 0, left: 0, bottom: 0, backgroundColor: theme.primary, borderRadius: 4 },
   speedBadge: { paddingHorizontal: 8, paddingVertical: 4, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 6 },
-  speedBadgeText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  speedBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
   liveRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   livePill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(239,68,68,0.3)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: 'rgba(239,68,68,0.5)' },
   liveDotMini: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#EF4444' },
   livePillText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   errorText: { color: theme.error, fontSize: 13, textAlign: 'center', paddingVertical: 4 },
-  qualityBarWrap: { position: 'absolute', right: 12, zIndex: 15 },
   qualityBar: { flexDirection: 'row', gap: 6, paddingHorizontal: 4 },
   qualityBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   qualityBtnActive: { backgroundColor: theme.primary, borderColor: theme.primary },
