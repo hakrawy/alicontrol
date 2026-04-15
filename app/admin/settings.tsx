@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, ActivityIndicator, Switch, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAlert } from '@/template';
@@ -151,6 +151,8 @@ export default function AdminSettings() {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
   const { language, direction } = useLocale();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -332,7 +334,10 @@ export default function AdminSettings() {
   return (
     <ScrollView
       style={[styles.container, { direction }]}
-      contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 32 }}
+      contentContainerStyle={[
+        { padding: 16, paddingBottom: insets.bottom + 32 },
+        isWide && { maxWidth: 680, alignSelf: 'center', width: '100%', paddingHorizontal: 24 },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       {/* General */}
