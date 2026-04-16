@@ -177,7 +177,7 @@ export default function AdminAddons() {
       await loadAddons();
       showAlert(
         copy.importSummary,
-        `${summary.addonName}\nMovies: +${summary.importedMovies} / merged ${summary.mergedMovies}\nSeries: +${summary.importedSeries} / merged ${summary.mergedSeries}\nEpisodes: +${summary.importedEpisodes}\nSkipped: ${summary.skipped}${summary.errors.length ? `\n\n${summary.errors.join('\n')}` : ''}`
+        `${summary.addonName}\nMovies: +${summary.importedMovies} / merged ${summary.mergedMovies}\nSeries: +${summary.importedSeries} / merged ${summary.mergedSeries}\nEpisodes: +${summary.importedEpisodes}\nChannels: +${summary.importedChannels} / merged ${summary.mergedChannels}\nSkipped: ${summary.skipped}${summary.errors.length ? `\n\n${summary.errors.join('\n')}` : ''}`
       );
     } catch (error: any) {
       showAlert('Import failed', error?.message || 'Could not import this add-on.');
