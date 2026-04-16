@@ -1757,26 +1757,18 @@ export async function fetchPlaybackSourcesForContent(
     return sortSourcesForPlayback(uniqueSources(manualSources));
   }
 
-  const addonSourcesNested = await Promise.allSettled(
+  const addonSourcesNested = await Promise.all(
     streamAddons.map(async (addon) => {
       const addonCandidates = [
         ...candidates.filter((candidate) => candidate.addonId === addon.id),
         ...candidates.filter((candidate) => !candidate.addonId),
         ...candidates.filter((candidate) => candidate.addonId && candidate.addonId !== addon.id),
       ];
-      return Promise.race([
-        fetchStreamSourcesFromAddon(addon, addonCandidates),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('addon_timeout:' + addon.name)), 10000)
-        ),
-      ]);
+      return fetchStreamSourcesFromAddon(addon, addonCandidates);
     })
   );
-  const addonSources = addonSourcesNested
-    .filter((r) => r.status === 'fulfilled')
-    .flatMap((r) => r.value);
 
-  return sortSourcesForPlayback(uniqueSources([...manualSources, ...addonSources]));
+  return sortSourcesForPlayback(uniqueSources([...manualSources, ...addonSourcesNested.flat()]));
 }
 
 export async function resolvePlayableMediaForContent(input: {
@@ -3212,3 +3204,4 @@ export function formatViewers(count: number): string {
   return count.toString();
 }
 
+export * from './stremio';
