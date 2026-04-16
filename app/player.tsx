@@ -848,7 +848,7 @@ function NativeDirectVideoPlayer({
     Haptics.selectionAsync();
     player.playbackRate = speed;
     setPlaybackSpeed(speed);
-    setShowSpeedMenu(false);
+    setShowSettingsMenu(false);
   }, [player]);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -1028,7 +1028,7 @@ function DashPlayer({
         {Platform.OS === 'web' ? (
           <iframe
             srcDoc={dashHtml}
-            style={[styles.webFrame, { objectFit: videoFit }] as any}
+            style={styles.webFrame as any}
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
           />
@@ -1108,7 +1108,7 @@ function EmbeddedPlayer({
         {Platform.OS === 'web' ? (
           <iframe
             src={embedUrl}
-            style={[styles.webFrame, { objectFit: videoFit }] as any}
+            style={styles.webFrame as any}
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
             referrerPolicy="strict-origin-when-cross-origin"
