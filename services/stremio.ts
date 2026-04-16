@@ -114,8 +114,6 @@ export interface PlaybackLookupIdentity {
   tmdb_id?: string | null;
   title?: string;
   year?: number | null;
-  season_number?: number;
-  episode_number?: number;
 }
 
 function isHttpUrl(rawUrl: string): boolean {
@@ -520,16 +518,7 @@ export async function fetchAddonMeta(addon: AddonRecord, externalType: string, e
   return payload?.meta || null;
 }
 
-export async function fetchAddonSubtitles(addon: AddonRecord, externalType: string, externalId: string) {
-  const subtitleUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
-    addon.manifest_url,
-    `subtitles/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
-  ), addon);
-  const payload = await fetchAddonJson<{ subtitles?: any[] }>(subtitleUrl, 6000, getAddonRequestHeaders(addon));
-  return Array.isArray(payload?.subtitles) ? payload.subtitles : [];
-}
-
-async function fetchAddonStreams(addon: AddonRecord, externalType: string, externalId: string) {
+export async function fetchAddonStreams(addon: AddonRecord, externalType: string, externalId: string) {
   const streamUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
     `stream/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
@@ -769,18 +758,21 @@ export function buildLookupCandidates(
   externalRefs: Array<Pick<AddonExternalRef, 'addon_id' | 'external_type' | 'external_id'>> = []
 ) {
   const candidates: StreamLookupCandidate[] = [];
-  const preferredType = contentType === 'movie' ? 'movie' : contentType === 'series' ? 'series' : contentType === 'channel' ? 'tv' : 'series';
-  const realStreamType = contentType === 'episode' ? 'series' : preferredType;
-  
+  const preferredType = contentType === 'movie' ? 'movie' : contentType === 'series' ? 'series' : contentType === 'channel' ? 'tv' : 'episode';
   const pushCandidate = (candidate: StreamLookupCandidate | null | undefined) => {
     if (!candidate?.externalType || !candidate?.externalId) return;
+    const normalized: StreamLookupCandidate = {
+      externalType: candidate.externalType,
+      externalId: candidate.externalId,
+      addonId: candidate.addonId || null,
+    };
     const duplicate = candidates.some((existing) =>
-      existing.externalType === candidate.externalType &&
-      existing.externalId === candidate.externalId &&
-      (existing.addonId || null) === (candidate.addonId || null)
+      existing.externalType === normalized.externalType &&
+      existing.externalId === normalized.externalId &&
+      (existing.addonId || null) === normalized.addonId
     );
     if (!duplicate) {
-      candidates.push({ externalType: candidate.externalType, externalId: candidate.externalId, addonId: candidate.addonId || null });
+      candidates.push(normalized);
     }
   };
 
@@ -792,26 +784,12 @@ export function buildLookupCandidates(
     });
   });
 
-  const isEp = contentType === 'episode' && identity?.season_number != null && identity?.episode_number != null;
-
   if (identity?.imdb_id) {
-    if (isEp) {
-      pushCandidate({ externalType: 'series', externalId: `${identity.imdb_id}:${identity.season_number}:${identity.episode_number}` });
-    } else {
-      pushCandidate({ externalType: preferredType, externalId: identity.imdb_id });
-    }
+    pushCandidate({ externalType: preferredType, externalId: identity.imdb_id });
   }
-  
   if (identity?.tmdb_id) {
-    const tmdbStr = String(identity.tmdb_id);
-    const prefixed = tmdbStr.startsWith('tmdb:') ? tmdbStr : `tmdb:${tmdbStr}`;
-    if (isEp) {
-      pushCandidate({ externalType: 'series', externalId: `${prefixed}:${identity.season_number}:${identity.episode_number}` });
-    } else {
-      pushCandidate({ externalType: preferredType, externalId: prefixed });
-    }
+    pushCandidate({ externalType: preferredType, externalId: identity.tmdb_id });
   }
-  
   if (identity?.id || contentId) {
     pushCandidate({ externalType: preferredType, externalId: identity?.id || contentId });
   }
@@ -850,59 +828,24 @@ export async function fetchPlaybackSourcesForContent(
   if (candidates.length === 0) return [];
 
   const streamAddons = addons.filter((a) => a.enabled && a.resources.includes('stream'));
-  const subtitleAddons = addons.filter((a) => a.enabled && a.resources.includes('subtitles'));
-
-  const nestedSourcesPromise = Promise.allSettled(
+  const nestedSources = await Promise.allSettled(
     streamAddons.map((addon) => {
       const addonCandidates = candidates.filter((c) => !c.addonId || c.addonId === addon.id);
       if (addonCandidates.length === 0) return Promise.resolve([]);
       return Promise.race([
         fetchStreamSourcesFromAddon(addon, addonCandidates),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('addon_timeout:' + addon.name)), 4000)),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('addon_timeout:' + addon.name)), 3000)
+        ),
       ]);
     })
   );
-
-  const nestedSubtitlesPromise = Promise.allSettled(
-    subtitleAddons.map(async (addon) => {
-      const subCandidates = candidates.filter((c) => !c.addonId || c.addonId === addon.id);
-      if (subCandidates.length === 0) return [];
-      for (const cand of subCandidates) {
-         try {
-             const subs = await fetchAddonSubtitles(addon, cand.externalType, cand.externalId);
-             if (subs && subs.length > 0) return subs;
-         } catch { continue; }
-      }
-      return [];
-    })
-  );
-
-  const [nestedSources, nestedSubtitles] = await Promise.all([nestedSourcesPromise, nestedSubtitlesPromise]);
-
-  const allSubs = nestedSubtitles
-    .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
-    .map((result) => result.value)
-    .flat()
-    .filter(Boolean);
-
-  const arabicSubs = allSubs.filter((sub: any) => {
-    const lang = String(sub.lang || sub.language || '').toLowerCase();
-    return lang.includes('ara') || lang.includes('ar') || lang.includes('arabic');
-  });
-  
-  const fallbackSubtitle = arabicSubs[0]?.url;
 
   const flatSources = nestedSources
     .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
     .map((result) => result.value)
     .flat()
     .filter(Boolean);
-
-  if (fallbackSubtitle) {
-    flatSources.forEach((src: any) => {
-      if (!src.subtitle) src.subtitle = fallbackSubtitle;
-    });
-  }
 
   return flatSources;
 }
