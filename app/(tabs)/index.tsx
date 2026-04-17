@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import {
   View, Text, ScrollView, Pressable, Dimensions, StyleSheet, TextInput,
   NativeSyntheticEvent, NativeScrollEvent, ActivityIndicator, RefreshControl,
@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
+import { config } from '../../constants/config';
 import { useAppContext } from '../../contexts/AppContext';
 import { formatViewers } from '../../services/api';
 import type { ContentItem, Banner, WatchHistory } from '../../services/api';
@@ -134,6 +135,32 @@ export default function HomeScreen() {
   };
 
   const featuredChannels = channels.filter(c => c.is_featured && c.is_live);
+  const movieCategoryShelves = useMemo(
+    () =>
+      config.categories
+        .map((category) => ({
+          ...category,
+          items: allMovies.filter((movie) =>
+            movie.category_id === category.id ||
+            (movie.genre || []).some((genre) => String(genre).toLowerCase().includes(category.name.toLowerCase()))
+          ).slice(0, 12),
+        }))
+        .filter((section) => section.items.length > 0)
+        .slice(0, 3),
+    [allMovies]
+  );
+  const channelCategoryShelves = useMemo(
+    () =>
+      config.liveCategories
+        .filter((category) => category.id !== 'all')
+        .map((category) => ({
+          ...category,
+          items: channels.filter((channel) => channel.is_live && String(channel.category || '').toLowerCase() === category.id).slice(0, 10),
+        }))
+        .filter((section) => section.items.length > 0)
+        .slice(0, 3),
+    [channels]
+  );
 
   if (loading) {
     return (
@@ -274,6 +301,17 @@ export default function HomeScreen() {
           </Animated.View>
         ) : null}
 
+        {movieCategoryShelves.map((section, sectionIndex) => (
+          <Animated.View key={section.id} entering={FadeInDown.delay(220 + sectionIndex * 40).duration(380)}>
+            <SectionHeader title={`${section.name} ${language === 'Arabic' ? 'مختارات' : 'Picks'}`} icon={section.icon as any} isRTL={isRTL} />
+            <HorizontalShelf isRTL={isRTL}>
+              {section.items.map((movie) => (
+                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie)} />
+              ))}
+            </HorizontalShelf>
+          </Animated.View>
+        ))}
+
         {/* New Releases */}
         {newContent.length > 0 ? (
           <Animated.View entering={FadeInDown.delay(300).duration(400)}>
@@ -317,6 +355,25 @@ export default function HomeScreen() {
             </HorizontalShelf>
           </Animated.View>
         ) : null}
+
+        {channelCategoryShelves.map((section, sectionIndex) => (
+          <Animated.View key={section.id} entering={FadeInDown.delay(430 + sectionIndex * 40).duration(380)}>
+            <SectionHeader title={`${section.name} ${language === 'Arabic' ? 'مباشر' : 'Live'}`} icon="live-tv" iconColor={theme.live} isRTL={isRTL} />
+            <HorizontalShelf isRTL={isRTL}>
+              {section.items.map((ch) => (
+                <Pressable key={ch.id} style={styles.liveCard} onPress={() => openChannel(ch)}>
+                  <View style={styles.liveImageWrap}>
+                    <Image source={{ uri: ch.logo }} style={styles.liveLogo} contentFit="cover" transition={200} />
+                    <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>{copy.live}</Text></View>
+                  </View>
+                  <Text style={styles.liveChannelName} numberOfLines={1}>{ch.name}</Text>
+                  <Text style={styles.liveProgram} numberOfLines={1}>{ch.current_program}</Text>
+                  <Text style={styles.liveViewers}>{formatViewers(ch.live_viewers ?? ch.viewers)} {copy.watching}</Text>
+                </Pressable>
+              ))}
+            </HorizontalShelf>
+          </Animated.View>
+        ))}
 
         {/* Watch Rooms */}
         {activeRooms.length > 0 ? (
