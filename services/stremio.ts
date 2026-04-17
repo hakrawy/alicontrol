@@ -152,6 +152,7 @@ const CHANNEL_CATEGORY_RULES: Array<{ id: string; keywords: string[] }> = [
 
 const SERIES_HINT_KEYWORDS = ['series', 'season', 'episode', 'show', 'tv show', 'anime', 'soap', 'مسلسل', 'حلقات', 'مواسم'];
 const CHANNEL_HINT_KEYWORDS = ['live', 'channel', 'channels', 'iptv', 'broadcast', 'station', 'network', 'tv channel', 'قناة', 'قنوات', 'مباشر', 'بث'];
+const MOVIE_HINT_KEYWORDS = ['movie', 'film', 'cinema', 'feature', 'web-dl', 'bluray', 'dvdrip', '1080p', '720p', '4k', 'فيلم', 'سينما'];
 
 function normalizeLooseText(value: unknown) {
   return String(value || '')
@@ -256,13 +257,24 @@ function inferImportedItemContentType(context: ImportedCatalogContext): LocalCon
     : '';
   const fullHaystack = normalizeLooseText(`${catalogHaystack} ${metaHaystack} ${streamNames}`);
 
-  const isChannelLike =
-    hasKeyword(metaHaystack, CHANNEL_HINT_KEYWORDS) ||
-    hasKeyword(fullHaystack, CHANNEL_CATEGORY_RULES.flatMap((rule) => rule.keywords)) ||
-    (!extractImdbId(context.meta) && !context.meta?.releaseInfo && hasKeyword(catalogHaystack, CHANNEL_HINT_KEYWORDS));
+  const movieScore =
+    (extractImdbId(context.meta) ? 3 : 0) +
+    (context.meta?.releaseInfo ? 2 : 0) +
+    (hasKeyword(fullHaystack, MOVIE_HINT_KEYWORDS) ? 2 : 0);
+  const seriesScore =
+    (hasKeyword(fullHaystack, SERIES_HINT_KEYWORDS) ? 3 : 0) +
+    (Array.isArray(context.meta?.videos) && context.meta.videos.length > 0 ? 2 : 0) +
+    ((context.catalog?.type || '').toLowerCase() === 'series' ? 2 : 0) +
+    ((context.catalog?.type || '').toLowerCase() === 'tv' && !hasKeyword(catalogHaystack, CHANNEL_HINT_KEYWORDS) ? 1 : 0);
+  const channelScore =
+    (hasKeyword(catalogHaystack, CHANNEL_HINT_KEYWORDS) ? 4 : 0) +
+    (hasKeyword(metaHaystack, CHANNEL_HINT_KEYWORDS) ? 3 : 0) +
+    ((context.catalog?.type || '').toLowerCase() === 'channel' ? 3 : 0) +
+    ((context.catalog?.type || '').toLowerCase() === 'tv' && hasKeyword(catalogHaystack, ['live', 'channel', 'iptv']) ? 2 : 0);
 
-  if (isChannelLike) return 'channel';
-  if (hasKeyword(fullHaystack, SERIES_HINT_KEYWORDS)) return 'series';
+  if (channelScore >= 4 && channelScore > Math.max(movieScore, seriesScore)) return 'channel';
+  if (seriesScore >= movieScore && seriesScore > 0) return 'series';
+  if (movieScore > 0) return 'movie';
   return inferLocalContentType({
     catalogId: context.catalog?.id,
     catalogType: context.catalog?.type,
