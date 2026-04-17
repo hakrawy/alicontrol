@@ -144,7 +144,8 @@ export default function ContentDetailScreen() {
         const related = all
           .filter((candidate) => {
             const candidateGenres = Array.isArray(candidate.genre) ? candidate.genre.filter(Boolean) : [];
-            return candidate.id !== content.id && candidateGenres.some((genre) => sourceGenres.includes(genre));
+            const sameCategory = (candidate as any).category_id && (candidate as any).category_id === (content as any).category_id;
+            return candidate.id !== content.id && (sameCategory || candidateGenres.some((genre) => sourceGenres.includes(genre)));
           })
           .slice(0, 6);
         if (!cancelled) {
@@ -326,7 +327,7 @@ export default function ContentDetailScreen() {
     });
   };
 
-  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null } }) => {
+  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null; season_number?: number; episode_number?: number } }) => {
     setSourcesLoading(true);
     try {
       const addonSources = await api.fetchPlaybackSourcesForContent(target.contentType, target.contentId, target.identity).catch(() => []);
@@ -406,7 +407,7 @@ export default function ContentDetailScreen() {
       title: `${content.title} - ${epTitle}`,
       viewerContentId: content.id,
       viewerContentType: 'series',
-      identity: selectedEpisode ? { id: selectedEpisode.id, title: epTitle, year: seriesData.year } : { id: content.id, title: epTitle, year: seriesData.year },
+      identity: selectedEpisode ? { id: selectedEpisode.id, imdb_id: content.imdb_id as any, tmdb_id: content.tmdb_id as any, title: epTitle, year: seriesData.year, season_number: normalizedSeasons.find(s => (s.episodes||[]).some(e => e.id === selectedEpisode.id))?.number, episode_number: selectedEpisode.number } : { id: content.id, title: epTitle, year: seriesData.year },
     });
   };
 
