@@ -114,6 +114,160 @@ export interface PlaybackLookupIdentity {
   tmdb_id?: string | null;
   title?: string;
   year?: number | null;
+  season_number?: number;
+  episode_number?: number;
+}
+
+type LocalContentType = 'movie' | 'series' | 'channel';
+
+interface ImportedCatalogContext {
+  addon?: AddonRecord;
+  catalog?: AddonCatalog;
+  meta?: any;
+  streams?: any[];
+}
+
+const CONTENT_GENRE_RULES: Array<{ id: string; label: string; keywords: string[] }> = [
+  { id: 'action', label: 'Action', keywords: ['action', 'fight', 'battle', 'combat', 'war', 'martial', 'اكشن', 'حركة'] },
+  { id: 'comedy', label: 'Comedy', keywords: ['comedy', 'sitcom', 'funny', 'humor', 'كوميديا', 'ضحك'] },
+  { id: 'drama', label: 'Drama', keywords: ['drama', 'dramatic', 'soap', 'دراما'] },
+  { id: 'horror', label: 'Horror', keywords: ['horror', 'scary', 'slasher', 'supernatural', 'رعب'] },
+  { id: 'scifi', label: 'Sci-Fi', keywords: ['sci-fi', 'science fiction', 'scifi', 'space', 'future', 'خيال علمي'] },
+  { id: 'romance', label: 'Romance', keywords: ['romance', 'romantic', 'love', 'رومانسي', 'حب'] },
+  { id: 'thriller', label: 'Thriller', keywords: ['thriller', 'suspense', 'mystery', 'crime', 'إثارة', 'تشويق', 'جريمة'] },
+  { id: 'documentary', label: 'Documentary', keywords: ['documentary', 'docu', 'history', 'nature', 'biography', 'وثائقي', 'تاريخ'] },
+  { id: 'animation', label: 'Animation', keywords: ['animation', 'animated', 'anime', 'cartoon', 'kids animation', 'رسوم', 'انمي'] },
+  { id: 'fantasy', label: 'Fantasy', keywords: ['fantasy', 'magic', 'myth', 'dragon', 'فانتازيا', 'سحري'] },
+];
+
+const CHANNEL_CATEGORY_RULES: Array<{ id: string; keywords: string[] }> = [
+  { id: 'news', keywords: ['news', 'breaking', 'weather', 'cnn', 'fox news', 'msnbc', 'newsmax', 'اخبار', 'نشرة', 'طقس'] },
+  { id: 'sports', keywords: ['sport', 'sports', 'espn', 'bein', 'nfl', 'nba', 'mlb', 'ufc', 'رياضة', 'مباراة'] },
+  { id: 'movies', keywords: ['movie', 'cinema', 'films', 'hollywood', 'box office', 'افلام', 'سينما'] },
+  { id: 'kids', keywords: ['kids', 'cartoon', 'junior', 'disney', 'nick', 'children', 'اطفال', 'صغار'] },
+  { id: 'music', keywords: ['music', 'mtv', 'hits', 'radio', 'concert', 'اغاني', 'موسيقى'] },
+  { id: 'documentary', keywords: ['documentary', 'history', 'nature', 'science', 'discovery', 'وثائقي'] },
+  { id: 'entertainment', keywords: ['entertainment', 'general', 'variety', 'lifestyle', 'reality', 'showbiz', 'ترفيه', 'منوعات'] },
+];
+
+const SERIES_HINT_KEYWORDS = ['series', 'season', 'episode', 'show', 'tv show', 'anime', 'soap', 'مسلسل', 'حلقات', 'مواسم'];
+const CHANNEL_HINT_KEYWORDS = ['live', 'channel', 'channels', 'iptv', 'broadcast', 'station', 'network', 'tv channel', 'قناة', 'قنوات', 'مباشر', 'بث'];
+
+function normalizeLooseText(value: unknown) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[_\-./]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasKeyword(haystack: string, keywords: string[]) {
+  return keywords.some((keyword) => haystack.includes(normalizeLooseText(keyword)));
+}
+
+function uniqueStrings(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  return values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function uniqueStreamSources(sources: StreamSource[]) {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    const key = `${source.url}|${source.server || ''}|${source.quality || ''}|${source.addonId || ''}`;
+    if (!source.url || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function inferContentGenres(context: ImportedCatalogContext) {
+  const rawGenres = Array.isArray(context.meta?.genres)
+    ? uniqueStrings(context.meta.genres.map((genre: unknown) => String(genre)))
+    : [];
+  const haystack = normalizeLooseText([
+    context.catalog?.name,
+    context.catalog?.id,
+    context.catalog?.type,
+    context.meta?.name,
+    context.meta?.description,
+    rawGenres.join(' '),
+  ].join(' '));
+
+  const matchedRules = CONTENT_GENRE_RULES.filter((rule) =>
+    rawGenres.some((genre) => hasKeyword(normalizeLooseText(genre), rule.keywords)) || hasKeyword(haystack, rule.keywords)
+  );
+
+  if (matchedRules.length > 0) {
+    const primary = matchedRules.map((rule) => rule.label);
+    const carryForward = rawGenres.filter((genre) => !primary.some((label) => label.toLowerCase() === genre.toLowerCase()));
+    return uniqueStrings([...primary, ...carryForward]).slice(0, 5);
+  }
+
+  return rawGenres.slice(0, 5);
+}
+
+function inferPrimaryCategoryId(genres: string[]) {
+  const normalizedGenres = genres.map((genre) => normalizeLooseText(genre));
+  const match = CONTENT_GENRE_RULES.find((rule) =>
+    normalizedGenres.some((genre) => hasKeyword(genre, rule.keywords) || genre === rule.id)
+  );
+  return match?.id || null;
+}
+
+function inferChannelCategory(context: ImportedCatalogContext) {
+  const haystack = normalizeLooseText([
+    context.addon?.name,
+    context.catalog?.name,
+    context.catalog?.id,
+    context.catalog?.type,
+    context.meta?.name,
+    context.meta?.description,
+    Array.isArray(context.meta?.genres) ? context.meta.genres.join(' ') : '',
+  ].join(' '));
+
+  const matchedRule = CHANNEL_CATEGORY_RULES.find((rule) => hasKeyword(haystack, rule.keywords));
+  return matchedRule?.id || 'entertainment';
+}
+
+function inferImportedItemContentType(context: ImportedCatalogContext): LocalContentType {
+  const catalogHaystack = normalizeLooseText([
+    context.addon?.name,
+    context.catalog?.id,
+    context.catalog?.type,
+    context.catalog?.name,
+  ].join(' '));
+  const metaHaystack = normalizeLooseText([
+    context.meta?.id,
+    context.meta?.name,
+    context.meta?.description,
+    Array.isArray(context.meta?.genres) ? context.meta.genres.join(' ') : '',
+  ].join(' '));
+
+  const streamNames = Array.isArray(context.streams)
+    ? context.streams.map((stream) => normalizeLooseText(`${stream?.name || ''} ${stream?.title || ''} ${stream?.description || ''}`)).join(' ')
+    : '';
+  const fullHaystack = normalizeLooseText(`${catalogHaystack} ${metaHaystack} ${streamNames}`);
+
+  const isChannelLike =
+    hasKeyword(metaHaystack, CHANNEL_HINT_KEYWORDS) ||
+    hasKeyword(fullHaystack, CHANNEL_CATEGORY_RULES.flatMap((rule) => rule.keywords)) ||
+    (!extractImdbId(context.meta) && !context.meta?.releaseInfo && hasKeyword(catalogHaystack, CHANNEL_HINT_KEYWORDS));
+
+  if (isChannelLike) return 'channel';
+  if (hasKeyword(fullHaystack, SERIES_HINT_KEYWORDS)) return 'series';
+  return inferLocalContentType({
+    catalogId: context.catalog?.id,
+    catalogType: context.catalog?.type,
+    name: context.catalog?.name,
+  });
 }
 
 function isHttpUrl(rawUrl: string): boolean {
@@ -168,7 +322,7 @@ function normalizeAddonConfigField(rawField: any, index: number): AddonConfigFie
         typeof option === 'string'
           ? { label: option, value: option }
           : { label: String(option?.label || option?.name || option?.value || ''), value: String(option?.value || option?.name || option?.label || '') }
-      ).filter((option) => option.label && option.value)
+      ).filter((option: { label: string; value: string }) => option.label && option.value)
     : undefined;
 
   return {
@@ -249,9 +403,9 @@ function toNumericYear(rawValue: unknown) {
 }
 
 export function inferLocalContentType(input: { catalogId?: string; catalogType?: string; name?: string }) {
-  const haystack = `${input.catalogId || ''} ${input.catalogType || ''} ${input.name || ''}`.toLowerCase();
-  if (/(tv|iptv|live|قنوات|مباشر)/i.test(haystack) && !haystack.includes('show')) return 'channel' as const;
-  if (/(series|season|episode|show|tv|مسلسلات|مسلسل|حلقات)/i.test(haystack)) return 'series' as const;
+  const haystack = normalizeLooseText(`${input.catalogId || ''} ${input.catalogType || ''} ${input.name || ''}`);
+  if (hasKeyword(haystack, CHANNEL_HINT_KEYWORDS)) return 'channel' as const;
+  if (hasKeyword(haystack, SERIES_HINT_KEYWORDS)) return 'series' as const;
   return 'movie' as const;
 }
 
@@ -500,6 +654,57 @@ export async function upsertExternalRef(input: Omit<AddonExternalRef, 'id'>) {
   if (error) throw error;
 }
 
+async function maybeDeleteStaleImportedContent(ref: AddonExternalRef) {
+  if (!ref?.content_id) return;
+
+  const { count: linkedRefs } = await supabase
+    .from('content_external_refs')
+    .select('*', { count: 'exact', head: true })
+    .eq('content_type', ref.content_type)
+    .eq('content_id', ref.content_id);
+
+  if ((linkedRefs || 0) > 1) return;
+
+  if (ref.content_type === 'series') {
+    const [{ count: seasonsCount }, { count: episodesCount }] = await Promise.all([
+      supabase.from('seasons').select('*', { count: 'exact', head: true }).eq('series_id', ref.content_id),
+      supabase.from('episodes').select('*', { count: 'exact', head: true }).eq('series_id', ref.content_id),
+    ]);
+    if ((seasonsCount || 0) > 0 || (episodesCount || 0) > 0) return;
+  }
+
+  const table =
+    ref.content_type === 'movie' ? 'movies'
+      : ref.content_type === 'series' ? 'series'
+      : ref.content_type === 'channel' ? 'channels'
+      : null;
+  if (!table) return;
+
+  await supabase.from(table).delete().eq('id', ref.content_id);
+}
+
+async function cleanupConflictingExternalRefs(
+  addonId: string,
+  externalType: string,
+  externalId: string,
+  expectedType: LocalContentType
+) {
+  const { data: conflicts, error } = await supabase
+    .from('content_external_refs')
+    .select('*')
+    .eq('addon_id', addonId)
+    .eq('external_type', externalType)
+    .eq('external_id', externalId)
+    .neq('content_type', expectedType);
+
+  if (error) throw error;
+
+  for (const conflict of (conflicts || []) as AddonExternalRef[]) {
+    await maybeDeleteStaleImportedContent(conflict);
+    await supabase.from('content_external_refs').delete().eq('id', conflict.id);
+  }
+}
+
 export async function fetchAddonCatalogItems(addon: AddonRecord, catalog: AddonCatalog) {
   const catalogUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
@@ -518,7 +723,16 @@ export async function fetchAddonMeta(addon: AddonRecord, externalType: string, e
   return payload?.meta || null;
 }
 
-export async function fetchAddonStreams(addon: AddonRecord, externalType: string, externalId: string) {
+export async function fetchAddonSubtitles(addon: AddonRecord, externalType: string, externalId: string) {
+  const subtitleUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
+    addon.manifest_url,
+    `subtitles/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
+  ), addon);
+  const payload = await fetchAddonJson<{ subtitles?: any[] }>(subtitleUrl, 6000, getAddonRequestHeaders(addon));
+  return Array.isArray(payload?.subtitles) ? payload.subtitles : [];
+}
+
+async function fetchAddonStreams(addon: AddonRecord, externalType: string, externalId: string) {
   const streamUrl = applyAddonConfigToUrl(buildAddonResourceUrl(
     addon.manifest_url,
     `stream/${encodeURIComponent(externalType)}/${encodeURIComponent(externalId)}.json`
@@ -527,14 +741,33 @@ export async function fetchAddonStreams(addon: AddonRecord, externalType: string
   return Array.isArray(payload?.streams) ? payload.streams : [];
 }
 
-async function resolveOrCreateMovieForAddon(meta: any) {
+async function resolveOrCreateMovieForAddon(meta: any, streamSources: StreamSource[] = [], catalog?: AddonCatalog) {
   const title = meta?.name?.trim() || 'Untitled';
   const year = toNumericYear(meta?.releaseInfo);
   const imdbId = extractImdbId(meta);
+  const inferredGenres = inferContentGenres({ meta, catalog });
+  const inferredCategoryId = inferPrimaryCategoryId(inferredGenres);
+  const inferredQualities = uniqueStrings(streamSources.map((source) => source.quality).filter(Boolean));
   const key = buildImportLookupKey({ imdbId, title, year });
   const matchedRef = await findExistingContentRef(key, 'movie');
   if (matchedRef?.content_id) {
-    return { id: matchedRef.content_id, merged: true, title, year, imdbId };
+    const existingMovie = await api.fetchMovieById(matchedRef.content_id).catch(() => null);
+    if (existingMovie) {
+      const updatedMovie = await api.upsertMovie({
+        ...existingMovie,
+        id: existingMovie.id,
+        description: existingMovie.description || meta?.description || '',
+        poster: existingMovie.poster || meta?.poster || meta?.background || '',
+        backdrop: existingMovie.backdrop || meta?.background || meta?.poster || '',
+        genre: uniqueStrings([...(existingMovie.genre || []), ...inferredGenres]),
+        category_id: existingMovie.category_id || inferredCategoryId,
+        quality: uniqueStrings([...(existingMovie.quality || []), ...inferredQualities]).length > 0
+          ? uniqueStrings([...(existingMovie.quality || []), ...inferredQualities])
+          : ['Auto'],
+        stream_sources: uniqueStreamSources([...(existingMovie.stream_sources || []), ...streamSources]),
+      });
+      return { id: updatedMovie.id, merged: true, title, year, imdbId };
+    }
   }
 
   const { data: existingMovies } = await supabase
@@ -544,7 +777,20 @@ async function resolveOrCreateMovieForAddon(meta: any) {
     .eq('year', year)
     .limit(1);
   if (existingMovies?.[0]) {
-    return { id: existingMovies[0].id, merged: true, title, year, imdbId };
+    const updatedMovie = await api.upsertMovie({
+      ...existingMovies[0],
+      id: existingMovies[0].id,
+      description: existingMovies[0].description || meta?.description || '',
+      poster: existingMovies[0].poster || meta?.poster || meta?.background || '',
+      backdrop: existingMovies[0].backdrop || meta?.background || meta?.poster || '',
+      genre: uniqueStrings([...(existingMovies[0].genre || []), ...inferredGenres]),
+      category_id: existingMovies[0].category_id || inferredCategoryId,
+      quality: uniqueStrings([...(existingMovies[0].quality || []), ...inferredQualities]).length > 0
+        ? uniqueStrings([...(existingMovies[0].quality || []), ...inferredQualities])
+        : ['Auto'],
+      stream_sources: uniqueStreamSources([...(api.parseStreamSources(existingMovies[0].stream_url) || []), ...streamSources]),
+    });
+    return { id: updatedMovie.id, merged: true, title, year, imdbId };
   }
 
   const createdMovie = await api.upsertMovie({
@@ -553,33 +799,48 @@ async function resolveOrCreateMovieForAddon(meta: any) {
     poster: meta?.poster || meta?.background || '',
     backdrop: meta?.background || meta?.poster || '',
     trailer_url: '',
-    stream_url: '',
-    stream_sources: [],
-    genre: Array.isArray(meta?.genres) ? meta.genres : [],
+    stream_url: streamSources[0]?.url || '',
+    stream_sources: streamSources,
+    genre: inferredGenres,
     rating: Number.parseFloat(meta?.imdbRating || '0') || 0,
     year,
     duration: meta?.runtime || '',
     cast_members: [],
-    quality: ['Auto'],
+    quality: inferredQualities.length > 0 ? inferredQualities : ['Auto'],
     subtitle_url: '',
     is_featured: false,
     is_trending: false,
     is_new: true,
     is_exclusive: false,
     is_published: true,
+    category_id: inferredCategoryId,
   });
 
   return { id: createdMovie.id, merged: false, title, year, imdbId };
 }
 
-async function resolveOrCreateSeriesForAddon(meta: any) {
+async function resolveOrCreateSeriesForAddon(meta: any, catalog?: AddonCatalog) {
   const title = meta?.name?.trim() || 'Untitled Series';
   const year = toNumericYear(meta?.releaseInfo);
   const imdbId = extractImdbId(meta);
+  const inferredGenres = inferContentGenres({ meta, catalog });
+  const inferredCategoryId = inferPrimaryCategoryId(inferredGenres);
   const key = buildImportLookupKey({ imdbId, title, year });
   const matchedRef = await findExistingContentRef(key, 'series');
   if (matchedRef?.content_id) {
-    return { id: matchedRef.content_id, merged: true, title, year, imdbId };
+    const existingSeries = await api.fetchSeriesById(matchedRef.content_id).catch(() => null);
+    if (existingSeries) {
+      const updatedSeries = await api.upsertSeries({
+        ...existingSeries,
+        id: existingSeries.id,
+        description: existingSeries.description || meta?.description || '',
+        poster: existingSeries.poster || meta?.poster || meta?.background || '',
+        backdrop: existingSeries.backdrop || meta?.background || meta?.poster || '',
+        genre: uniqueStrings([...(existingSeries.genre || []), ...inferredGenres]),
+        category_id: existingSeries.category_id || inferredCategoryId,
+      });
+      return { id: updatedSeries.id, merged: true, title, year, imdbId };
+    }
   }
 
   const { data: existingSeries } = await supabase
@@ -589,7 +850,16 @@ async function resolveOrCreateSeriesForAddon(meta: any) {
     .eq('year', year)
     .limit(1);
   if (existingSeries?.[0]) {
-    return { id: existingSeries[0].id, merged: true, title, year, imdbId };
+    const updatedSeries = await api.upsertSeries({
+      ...existingSeries[0],
+      id: existingSeries[0].id,
+      description: existingSeries[0].description || meta?.description || '',
+      poster: existingSeries[0].poster || meta?.poster || meta?.background || '',
+      backdrop: existingSeries[0].backdrop || meta?.background || meta?.poster || '',
+      genre: uniqueStrings([...(existingSeries[0].genre || []), ...inferredGenres]),
+      category_id: existingSeries[0].category_id || inferredCategoryId,
+    });
+    return { id: updatedSeries.id, merged: true, title, year, imdbId };
   }
 
   const createdSeries = await api.upsertSeries({
@@ -598,7 +868,7 @@ async function resolveOrCreateSeriesForAddon(meta: any) {
     poster: meta?.poster || meta?.background || '',
     backdrop: meta?.background || meta?.poster || '',
     trailer_url: '',
-    genre: Array.isArray(meta?.genres) ? meta.genres : [],
+    genre: inferredGenres,
     rating: Number.parseFloat(meta?.imdbRating || '0') || 0,
     year,
     cast_members: [],
@@ -609,29 +879,42 @@ async function resolveOrCreateSeriesForAddon(meta: any) {
     is_new: true,
     is_exclusive: false,
     is_published: true,
+    category_id: inferredCategoryId,
   });
 
   return { id: createdSeries.id, merged: false, title, year, imdbId };
 }
 
-async function resolveOrCreateChannelForAddon(meta: any) {
+async function resolveOrCreateChannelForAddon(meta: any, streamSources: StreamSource[] = [], catalog?: AddonCatalog, addon?: AddonRecord) {
   const name = meta?.name?.trim() || 'Untitled Channel';
+  const category = inferChannelCategory({ addon, catalog, meta });
+  const currentProgram = meta?.description?.trim() || catalog?.name?.trim() || 'Now Streaming';
   const { data: existingChannel } = await supabase
     .from('channels')
     .select('*')
     .ilike('name', name)
     .limit(1);
   if (existingChannel?.[0]) {
-    return { id: existingChannel[0].id, merged: true, name };
+    const updatedChannel = await api.upsertChannel({
+      ...existingChannel[0],
+      id: existingChannel[0].id,
+      logo: existingChannel[0].logo || meta?.poster || meta?.logo || meta?.background || '',
+      stream_sources: uniqueStreamSources([...(api.parseStreamSources(existingChannel[0].stream_url) || []), ...streamSources]),
+      stream_url: existingChannel[0].stream_url || streamSources[0]?.url || '',
+      category,
+      current_program: existingChannel[0].current_program || currentProgram,
+      is_live: true,
+    } as any);
+    return { id: updatedChannel?.id, merged: true, name };
   }
 
   const createdChannel = await api.upsertChannel({
     name,
     logo: meta?.poster || meta?.logo || meta?.background || '',
-    stream_url: '',
-    stream_sources: [],
-    category: Array.isArray(meta?.genres) && meta.genres[0] ? meta.genres[0] : 'General',
-    current_program: 'Now Streaming',
+    stream_url: streamSources[0]?.url || '',
+    stream_sources: streamSources,
+    category,
+    current_program: currentProgram,
     is_live: true,
     is_featured: false,
     viewers: 0,
@@ -669,20 +952,32 @@ export async function importAddonContent(addonId: string) {
 
   for (const catalog of addon.catalogs || []) {
     if (!catalog?.id || !catalog?.type) continue;
-    const localType = inferLocalContentType({ catalogId: catalog.id, catalogType: catalog.type, name: catalog.name });
+    const catalogTypeHint = inferLocalContentType({ catalogId: catalog.id, catalogType: catalog.type, name: catalog.name });
 
     try {
       const metas = await fetchAddonCatalogItems(addon, catalog);
       for (const meta of metas) {
         try {
           const streams = await fetchAddonStreams(addon, catalog.type, meta.id).catch(() => []);
-          if (streams.length === 0) {
+          const normalizedSources = streams
+            .map((stream, index) => normalizeStreamSourceFromAddon(addon, stream, index))
+            .filter(Boolean) as StreamSource[];
+          if (normalizedSources.length === 0) {
             summary.skipped += 1;
             continue;
           }
 
+          const localType = inferImportedItemContentType({
+            addon,
+            catalog,
+            meta,
+            streams,
+          }) || catalogTypeHint;
+
+          await cleanupConflictingExternalRefs(addon.id, catalog.type, meta.id, localType);
+
           if (localType === 'channel') {
-            const channel = await resolveOrCreateChannelForAddon(meta);
+            const channel = await resolveOrCreateChannelForAddon(meta, normalizedSources, catalog, addon);
             if (channel.merged) summary.mergedChannels += 1;
             else summary.importedChannels += 1;
 
@@ -701,7 +996,7 @@ export async function importAddonContent(addonId: string) {
           }
 
           if (localType === 'movie') {
-            const movie = await resolveOrCreateMovieForAddon(meta);
+            const movie = await resolveOrCreateMovieForAddon(meta, normalizedSources, catalog);
             if (movie.merged) summary.mergedMovies += 1;
             else summary.importedMovies += 1;
 
@@ -720,7 +1015,7 @@ export async function importAddonContent(addonId: string) {
           }
 
           if (localType === 'series') {
-            const series = await resolveOrCreateSeriesForAddon(meta);
+            const series = await resolveOrCreateSeriesForAddon(meta, catalog);
             if (series.merged) summary.mergedSeries += 1;
             else summary.importedSeries += 1;
 
@@ -758,21 +1053,18 @@ export function buildLookupCandidates(
   externalRefs: Array<Pick<AddonExternalRef, 'addon_id' | 'external_type' | 'external_id'>> = []
 ) {
   const candidates: StreamLookupCandidate[] = [];
-  const preferredType = contentType === 'movie' ? 'movie' : contentType === 'series' ? 'series' : contentType === 'channel' ? 'tv' : 'episode';
+  const preferredType = contentType === 'movie' ? 'movie' : contentType === 'series' ? 'series' : contentType === 'channel' ? 'tv' : 'series';
+  const realStreamType = contentType === 'episode' ? 'series' : preferredType;
+  
   const pushCandidate = (candidate: StreamLookupCandidate | null | undefined) => {
     if (!candidate?.externalType || !candidate?.externalId) return;
-    const normalized: StreamLookupCandidate = {
-      externalType: candidate.externalType,
-      externalId: candidate.externalId,
-      addonId: candidate.addonId || null,
-    };
     const duplicate = candidates.some((existing) =>
-      existing.externalType === normalized.externalType &&
-      existing.externalId === normalized.externalId &&
-      (existing.addonId || null) === normalized.addonId
+      existing.externalType === candidate.externalType &&
+      existing.externalId === candidate.externalId &&
+      (existing.addonId || null) === (candidate.addonId || null)
     );
     if (!duplicate) {
-      candidates.push(normalized);
+      candidates.push({ externalType: candidate.externalType, externalId: candidate.externalId, addonId: candidate.addonId || null });
     }
   };
 
@@ -784,12 +1076,26 @@ export function buildLookupCandidates(
     });
   });
 
+  const isEp = contentType === 'episode' && identity?.season_number != null && identity?.episode_number != null;
+
   if (identity?.imdb_id) {
-    pushCandidate({ externalType: preferredType, externalId: identity.imdb_id });
+    if (isEp) {
+      pushCandidate({ externalType: 'series', externalId: `${identity.imdb_id}:${identity.season_number}:${identity.episode_number}` });
+    } else {
+      pushCandidate({ externalType: preferredType, externalId: identity.imdb_id });
+    }
   }
+  
   if (identity?.tmdb_id) {
-    pushCandidate({ externalType: preferredType, externalId: identity.tmdb_id });
+    const tmdbStr = String(identity.tmdb_id);
+    const prefixed = tmdbStr.startsWith('tmdb:') ? tmdbStr : `tmdb:${tmdbStr}`;
+    if (isEp) {
+      pushCandidate({ externalType: 'series', externalId: `${prefixed}:${identity.season_number}:${identity.episode_number}` });
+    } else {
+      pushCandidate({ externalType: preferredType, externalId: prefixed });
+    }
   }
+  
   if (identity?.id || contentId) {
     pushCandidate({ externalType: preferredType, externalId: identity?.id || contentId });
   }
@@ -828,24 +1134,59 @@ export async function fetchPlaybackSourcesForContent(
   if (candidates.length === 0) return [];
 
   const streamAddons = addons.filter((a) => a.enabled && a.resources.includes('stream'));
-  const nestedSources = await Promise.allSettled(
+  const subtitleAddons = addons.filter((a) => a.enabled && a.resources.includes('subtitles'));
+
+  const nestedSourcesPromise = Promise.allSettled(
     streamAddons.map((addon) => {
       const addonCandidates = candidates.filter((c) => !c.addonId || c.addonId === addon.id);
       if (addonCandidates.length === 0) return Promise.resolve([]);
       return Promise.race([
         fetchStreamSourcesFromAddon(addon, addonCandidates),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('addon_timeout:' + addon.name)), 3000)
-        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('addon_timeout:' + addon.name)), 4000)),
       ]);
     })
   );
+
+  const nestedSubtitlesPromise = Promise.allSettled(
+    subtitleAddons.map(async (addon) => {
+      const subCandidates = candidates.filter((c) => !c.addonId || c.addonId === addon.id);
+      if (subCandidates.length === 0) return [];
+      for (const cand of subCandidates) {
+         try {
+             const subs = await fetchAddonSubtitles(addon, cand.externalType, cand.externalId);
+             if (subs && subs.length > 0) return subs;
+         } catch { continue; }
+      }
+      return [];
+    })
+  );
+
+  const [nestedSources, nestedSubtitles] = await Promise.all([nestedSourcesPromise, nestedSubtitlesPromise]);
+
+  const allSubs = nestedSubtitles
+    .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
+    .map((result) => result.value)
+    .flat()
+    .filter(Boolean);
+
+  const arabicSubs = allSubs.filter((sub: any) => {
+    const lang = String(sub.lang || sub.language || '').toLowerCase();
+    return lang.includes('ara') || lang.includes('ar') || lang.includes('arabic');
+  });
+  
+  const fallbackSubtitle = arabicSubs[0]?.url;
 
   const flatSources = nestedSources
     .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
     .map((result) => result.value)
     .flat()
     .filter(Boolean);
+
+  if (fallbackSubtitle) {
+    flatSources.forEach((src: any) => {
+      if (!src.subtitle) src.subtitle = fallbackSubtitle;
+    });
+  }
 
   return flatSources;
 }
