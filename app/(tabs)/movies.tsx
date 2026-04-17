@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { View, Text, Pressable, StyleSheet, Dimensions } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -7,9 +7,9 @@ import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { theme } from '../../constants/theme';
+import { config } from '../../constants/config';
 import { useAppContext } from '../../contexts/AppContext';
 import { useLocale } from '../../contexts/LocaleContext';
-import type { ContentItem } from '../../services/api';
 import { buildContentRoute } from '../../services/navigation';
 
 const GRID_GAP = 12;
@@ -19,17 +19,26 @@ export default function MoviesScreen() {
   const router = useRouter();
   const { language, direction } = useLocale();
   const { allMovies } = useAppContext();
+  const [activeCategory, setActiveCategory] = useState('all');
   const { width: screenWidth } = (require('react-native') as any).useWindowDimensions();
-  const GRID_COLUMNS = screenWidth > 1200 ? 5 : screenWidth > 900 ? 4 : screenWidth > 680 ? 3 : 2;
+  const gridColumns = screenWidth > 1200 ? 5 : screenWidth > 900 ? 4 : screenWidth > 680 ? 3 : 2;
+
+  const filteredMovies = useMemo(() => {
+    if (activeCategory === 'all') return allMovies;
+    return allMovies.filter((item) =>
+      item.category_id === activeCategory ||
+      (item.genre || []).some((genre) => genre.toLowerCase().includes(activeCategory))
+    );
+  }, [activeCategory, allMovies]);
 
   const sortedMovies = useMemo(
-    () => [...allMovies].sort((a, b) => (b.year || 0) - (a.year || 0) || (b.view_count || 0) - (a.view_count || 0)),
-    [allMovies]
+    () => [...filteredMovies].sort((a, b) => (b.year || 0) - (a.year || 0) || (b.view_count || 0) - (a.view_count || 0)),
+    [filteredMovies]
   );
 
   const copy = language === 'Arabic'
-    ? { title: 'مكتبة الأفلام', subtitle: `${sortedMovies.length} فيلم`, movie: 'فيلم' }
-    : { title: 'Movie Library', subtitle: `${sortedMovies.length} movies`, movie: 'Movie' };
+    ? { title: 'مكتبة الأفلام', subtitle: `${sortedMovies.length} فيلم`, movie: 'فيلم', all: 'الكل' }
+    : { title: 'Movie Library', subtitle: `${sortedMovies.length} movies`, movie: 'Movie', all: 'All' };
 
   return (
     <SafeAreaView edges={['top']} style={[styles.container, { direction }]}>
@@ -37,13 +46,27 @@ export default function MoviesScreen() {
         <Text style={styles.headerTitle}>{copy.title}</Text>
         <Text style={styles.headerSubtitle}>{copy.subtitle}</Text>
       </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>
+        <Pressable onPress={() => setActiveCategory('all')} style={[styles.categoryChip, activeCategory === 'all' && styles.categoryChipActive]}>
+          <Text style={[styles.categoryText, activeCategory === 'all' && styles.categoryTextActive]}>{copy.all}</Text>
+        </Pressable>
+        {config.categories.map((category) => (
+          <Pressable
+            key={category.id}
+            onPress={() => setActiveCategory(category.id)}
+            style={[styles.categoryChip, activeCategory === category.id && styles.categoryChipActive]}
+          >
+            <Text style={[styles.categoryText, activeCategory === category.id && styles.categoryTextActive]}>{category.name}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
       <FlashList
         data={sortedMovies}
-        numColumns={GRID_COLUMNS}
+        numColumns={gridColumns}
         estimatedItemSize={280}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 20, paddingTop: 8 }}
         renderItem={({ item, index }) => (
-          <View style={{ flex: 1, paddingRight: (index % GRID_COLUMNS !== GRID_COLUMNS - 1) ? GRID_GAP : 0, marginBottom: GRID_GAP }}>
+          <View style={{ flex: 1, paddingRight: (index % gridColumns !== gridColumns - 1) ? GRID_GAP : 0, marginBottom: GRID_GAP }}>
             <Pressable
               onPress={() => {
                 Haptics.selectionAsync();
@@ -63,7 +86,7 @@ export default function MoviesScreen() {
                   <Text style={styles.dot}>•</Text>
                   <Text style={styles.meta}>{item.year}</Text>
                   <Text style={styles.dot}>•</Text>
-                  <Text style={styles.meta}>{copy.movie}</Text>
+                  <Text style={styles.meta}>{item.genre?.[0] || copy.movie}</Text>
                 </View>
               </View>
             </Pressable>
@@ -80,6 +103,11 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 16, paddingVertical: 12 },
   headerTitle: { fontSize: 26, fontWeight: '800', color: '#FFF', letterSpacing: -0.5 },
   headerSubtitle: { fontSize: 13, color: theme.textSecondary, marginTop: 4 },
+  categoryRow: { paddingHorizontal: 16, gap: 8, paddingBottom: 12 },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
+  categoryChipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
+  categoryText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
+  categoryTextActive: { color: '#FFF' },
   card: { backgroundColor: theme.surface, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: theme.border },
   poster: { width: '100%', aspectRatio: 2 / 3, backgroundColor: theme.surfaceLight },
   badges: { position: 'absolute', top: 8, left: 8 },
