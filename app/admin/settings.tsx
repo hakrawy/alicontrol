@@ -56,9 +56,9 @@ const defaultSettings: {
     labelAr: 'مفتاح TMDB',
     icon: 'movie',
     type: 'password',
-    placeholder: 'eyJhbGciOiJIUzI1NiJ9...',
-    description: 'Used for importing content metadata from TMDB',
-    descriptionAr: 'يُستخدم لاستيراد بيانات المحتوى من TMDB',
+    placeholder: 'API Key v3 or Read Access Token',
+    description: 'Supports both TMDB API Key v3 and Read Access Token v4',
+    descriptionAr: 'يدعم مفتاح TMDB API Key v3 وكذلك Read Access Token v4',
     section: 'integrations',
   },
   {
@@ -159,6 +159,7 @@ export default function AdminSettings() {
   const [saved, setSaved] = useState<string | null>(null);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
   const [tmdbTestStatus, setTmdbTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [tmdbTestMessage, setTmdbTestMessage] = useState('');
 
   // ── CRITICAL FIX: `copy` must be INSIDE the component ──────────────
   const copy = language === 'Arabic'
@@ -213,26 +214,36 @@ export default function AdminSettings() {
     }
     setSaving(null);
     // Reset TMDB test status when key changes
-    if (key === 'tmdb_api_key') setTmdbTestStatus('idle');
+    if (key === 'tmdb_api_key') {
+      setTmdbTestStatus('idle');
+      setTmdbTestMessage('');
+    }
   };
 
   const testTmdbKey = async () => {
     const key = (settings['tmdb_api_key'] || '').trim();
-    if (!key) { showAlert('TMDB', 'Please enter an API key first'); return; }
+    if (!key) {
+      showAlert('TMDB', language === 'Arabic' ? 'أدخل مفتاح TMDB أولاً' : 'Please enter a TMDB credential first');
+      return;
+    }
     setTmdbTestStatus('testing');
+    setTmdbTestMessage('');
     try {
-      const res = await fetch(
-        'https://api.themoviedb.org/3/movie/550?language=en-US',
-        { headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' }, signal: AbortSignal.timeout(8000) }
-      );
-      const json = await res.json();
-      if (res.ok && json?.id) {
+      const result = await api.validateTmdbCredential(key);
+      if (result.ok) {
         setTmdbTestStatus('ok');
+        setTmdbTestMessage(
+          language === 'Arabic'
+            ? `تم التحقق بنجاح باستخدام ${result.mode === 'token' ? 'Read Access Token' : 'API Key v3'}`
+            : `Connected successfully using ${result.mode === 'token' ? 'Read Access Token' : 'API Key v3'}`
+        );
       } else {
         setTmdbTestStatus('fail');
+        setTmdbTestMessage(language === 'Arabic' ? 'تعذر التحقق من بيانات TMDB' : 'Could not validate TMDB credential');
       }
-    } catch {
+    } catch (error: any) {
       setTmdbTestStatus('fail');
+      setTmdbTestMessage(error?.message || (language === 'Arabic' ? 'فشل الاتصال مع TMDB' : 'TMDB validation failed'));
     }
   };
 
@@ -279,6 +290,7 @@ export default function AdminSettings() {
               placeholderTextColor={theme.textMuted}
               secureTextEntry={s.type === 'password' && !showPasswords[s.key]}
               autoCapitalize="none"
+              autoCorrect={false}
             />
             {s.type === 'password' && (
               <Pressable
@@ -320,9 +332,9 @@ export default function AdminSettings() {
               styles.tmdbTestResult,
               { color: tmdbTestStatus === 'ok' ? '#22C55E' : tmdbTestStatus === 'fail' ? '#EF4444' : theme.textMuted },
             ]}>
-              {tmdbTestStatus === 'testing' ? 'Testing connection...' :
-               tmdbTestStatus === 'ok' ? '✓ Connected to TMDB successfully' :
-               '✗ Invalid key or connection failed'}
+              {tmdbTestStatus === 'testing'
+                ? (language === 'Arabic' ? 'جارٍ اختبار الاتصال...' : 'Testing connection...')
+                : (tmdbTestMessage || (tmdbTestStatus === 'ok' ? 'Connected to TMDB successfully' : 'Invalid key or connection failed'))}
             </Text>
           )}
         </View>
