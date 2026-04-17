@@ -117,8 +117,10 @@ export interface AddonImportSummary {
   importedMovies: number;
   importedSeries: number;
   importedEpisodes: number;
+  importedChannels: number;
   mergedMovies: number;
   mergedSeries: number;
+  mergedChannels: number;
   skipped: number;
   errors: string[];
 }
@@ -134,13 +136,15 @@ export interface AddonRepairSummary {
 interface AddonExternalRef {
   id: string;
   addon_id: string;
-  content_type: 'movie' | 'series' | 'episode';
+  content_type: 'movie' | 'series' | 'episode' | 'channel';
   content_id: string;
   external_type: string;
   external_id: string;
   imdb_id?: string | null;
   title?: string | null;
   year?: number | null;
+  season_number?: number;
+  episode_number?: number;
   meta_json?: any;
 }
 
@@ -156,6 +160,8 @@ interface PlaybackLookupIdentity {
   tmdb_id?: string | null;
   title?: string;
   year?: number | null;
+  season_number?: number;
+  episode_number?: number;
 }
 
 export interface M3UEntry {
@@ -745,7 +751,7 @@ function normalizeAddonConfigField(rawField: any, index: number): AddonConfigFie
         typeof option === 'string'
           ? { label: option, value: option }
           : { label: String(option?.label || option?.name || option?.value || ''), value: String(option?.value || option?.name || option?.label || '') }
-      ).filter((option) => option.label && option.value)
+      ).filter((option: { label: string; value: string }) => option.label && option.value)
     : undefined;
 
   return {
@@ -1626,98 +1632,8 @@ export async function repairAddonSeriesEpisodes(addonId: string) {
 }
 
 export async function importAddonContent(addonId: string) {
-  const { data, error } = await supabase.from('addons').select('*').eq('id', addonId).single();
-  if (error) throw error;
-  const addon = normalizeAddonRecord(data);
-  const addonKind = inferAddonKind(addon);
-
-  const summary: AddonImportSummary = {
-    addonName: addon.name,
-    importedMovies: 0,
-    importedSeries: 0,
-    importedEpisodes: 0,
-    mergedMovies: 0,
-    mergedSeries: 0,
-    skipped: 0,
-    errors: [],
-  };
-
-  if (addonKind === 'stream') {
-    summary.skipped = 1;
-    summary.errors.push('This add-on is stream-only. It is saved as a playback provider and does not import catalogs.');
-    await updateAddon(addon.id, { last_imported_at: new Date().toISOString() } as any);
-    return summary;
-  }
-
-  for (const catalog of addon.catalogs || []) {
-    if (!catalog?.id || !catalog?.type) continue;
-    const localType = inferLocalContentType({ catalogId: catalog.id, catalogType: catalog.type, name: catalog.name });
-
-    try {
-      const metas = await fetchAddonCatalogItems(addon, catalog);
-      for (const meta of metas) {
-        try {
-          if (localType === 'movie') {
-            const movie = await resolveOrCreateMovieForAddon(meta);
-            if (movie.merged) summary.mergedMovies += 1;
-            else summary.importedMovies += 1;
-
-            await upsertExternalRef({
-              addon_id: addon.id,
-              content_type: 'movie',
-              content_id: movie.id,
-              external_type: catalog.type,
-              external_id: meta.id,
-              imdb_id: movie.imdbId,
-              title: movie.title,
-              year: movie.year,
-              meta_json: meta,
-            });
-            continue;
-          }
-
-          const series = await resolveOrCreateSeriesForAddon(meta);
-          if (series.merged) summary.mergedSeries += 1;
-          else summary.importedSeries += 1;
-
-          await upsertExternalRef({
-            addon_id: addon.id,
-            content_type: 'series',
-            content_id: series.id,
-            external_type: catalog.type,
-            external_id: meta.id,
-            imdb_id: series.imdbId,
-            title: series.title,
-            year: series.year,
-            meta_json: meta,
-          });
-
-          try {
-            const fullMeta = await fetchAddonMeta(addon, catalog.type, meta.id);
-            if (Array.isArray(fullMeta?.videos)) {
-              for (const [videoIndex, video] of fullMeta.videos.entries()) {
-                await ensureSeriesEpisode(addon, series.id, catalog.type, video, videoIndex);
-                summary.importedEpisodes += 1;
-              }
-              await updateSeriesCounts(series.id);
-            }
-          } catch {
-            // Some add-ons do not expose meta videos; keep the series imported without episodes.
-          }
-        } catch (itemError: any) {
-          summary.skipped += 1;
-          if (summary.errors.length < 10) {
-            summary.errors.push(`${meta?.name || meta?.id || 'Unknown item'}: ${itemError?.message || 'Import failed'}`);
-          }
-        }
-      }
-    } catch (catalogError: any) {
-      summary.errors.push(`${catalog.name || catalog.id}: ${catalogError?.message || 'Catalog request failed'}`);
-    }
-  }
-
-  await updateAddon(addon.id, { last_imported_at: new Date().toISOString() } as any);
-  return summary;
+  const stremioApi = await import('./stremio');
+  return stremioApi.importAddonContent(addonId);
 }
 
 export async function fetchPlaybackSourcesForContent(
@@ -1800,12 +1716,15 @@ export async function resolvePlayableMediaForContent(input: {
   if (input.contentType === 'episode') {
     const episode = await fetchEpisodeById(input.contentId);
     const parentSeries = await fetchSeriesById(episode.series_id).catch(() => null);
+    const seasonRecord = await supabase.from('seasons').select('number').eq('id', episode.season_id).single().catch(() => ({ data: null }));
     const addonSources = await fetchPlaybackSourcesForContent('episode', episode.id, {
       id: episode.id,
       imdb_id: parentSeries?.imdb_id || null,
       tmdb_id: parentSeries?.tmdb_id || null,
       title: episode.title,
       year: parentSeries?.year || null,
+      season_number: seasonRecord.data?.number || null,
+      episode_number: episode.number,
     }).catch(() => []);
     const sources = sortSourcesForPlayback(uniqueSources([...(episode.stream_sources || []), ...addonSources]));
     const url = sources[0]?.url || episode.stream_url;
@@ -3149,11 +3068,13 @@ export async function upsertChannel(channel: Partial<Channel>) {
     stream_url: serializeStreamSources(stream_sources, rest.stream_url),
   };
   if (id) {
-    const { error } = await supabase.from('channels').update(payload).eq('id', id);
+    const { data, error } = await supabase.from('channels').update(payload).eq('id', id).select().single();
     if (error) throw error;
+    return data;
   } else {
-    const { error } = await supabase.from('channels').insert(payload);
+    const { data, error } = await supabase.from('channels').insert(payload).select().single();
     if (error) throw error;
+    return data;
   }
 }
 
