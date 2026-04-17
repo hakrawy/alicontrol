@@ -160,6 +160,8 @@ export default function AdminSettings() {
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
   const [tmdbTestStatus, setTmdbTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
   const [tmdbTestMessage, setTmdbTestMessage] = useState('');
+  const tmdbCredential = (settings['tmdb_api_key'] || '').trim();
+  const tmdbCredentialMode = tmdbCredential ? (tmdbCredential.startsWith('eyJ') ? 'token' : 'apikey') : null;
 
   // ── CRITICAL FIX: `copy` must be INSIDE the component ──────────────
   const copy = language === 'Arabic'
@@ -337,6 +339,18 @@ export default function AdminSettings() {
                 : (tmdbTestMessage || (tmdbTestStatus === 'ok' ? 'Connected to TMDB successfully' : 'Invalid key or connection failed'))}
             </Text>
           )}
+          {s.key === 'tmdb_api_key' && tmdbCredentialMode && (
+            <View style={styles.tmdbModeWrap}>
+              <View style={[styles.tmdbModeBadge, tmdbCredentialMode === 'token' ? styles.tmdbModeToken : styles.tmdbModeKey]}>
+                <Text style={styles.tmdbModeBadgeText}>{tmdbCredentialMode === 'token' ? 'Read Access Token v4' : 'API Key v3'}</Text>
+              </View>
+              <Text style={styles.tmdbModeHint}>
+                {tmdbCredentialMode === 'token'
+                  ? (language === 'Arabic' ? 'سيتم استخدام Bearer token تلقائياً.' : 'Bearer authentication will be used automatically.')
+                  : (language === 'Arabic' ? 'سيتم استخدام قيمة api_key تلقائياً.' : 'The credential will be used as an api_key automatically.')}
+              </Text>
+            </View>
+          )}
         </View>
         <View style={styles.saveIndicator}>{renderSaveIndicator(s.key)}</View>
       </View>
@@ -503,4 +517,10 @@ const styles = StyleSheet.create({
   testBtnFail: { backgroundColor: 'rgba(239,68,68,0.18)', borderColor: 'rgba(239,68,68,0.4)' },
   testBtnText: { fontSize: 12, fontWeight: '700', color: theme.primary },
   tmdbTestResult: { fontSize: 12, fontWeight: '600', marginTop: 6, paddingLeft: 2 },
+  tmdbModeWrap: { marginTop: 8, gap: 6 },
+  tmdbModeBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
+  tmdbModeToken: { backgroundColor: 'rgba(59,130,246,0.18)', borderColor: 'rgba(59,130,246,0.4)' },
+  tmdbModeKey: { backgroundColor: 'rgba(168,85,247,0.18)', borderColor: 'rgba(168,85,247,0.4)' },
+  tmdbModeBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
+  tmdbModeHint: { color: theme.textMuted, fontSize: 12, lineHeight: 18 },
 });
