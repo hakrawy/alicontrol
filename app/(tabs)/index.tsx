@@ -27,7 +27,7 @@ export default function HomeScreen() {
   const { language, isRTL, direction } = useLocale();
   const {
     banners, trendingMovies, featuredMovies, newContent, allSeries, allMovies,
-    channels, activeRooms, isFavorite, addToFavorites, loading, refreshHome, watchHistory,
+    channels, activeRooms, dynamicSections, isFavorite, addToFavorites, loading, refreshHome, watchHistory,
   } = useAppContext();
   const [activeHero, setActiveHero] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -355,6 +355,31 @@ export default function HomeScreen() {
             </HorizontalShelf>
           </Animated.View>
         ) : null}
+
+        {dynamicSections
+          .filter((section) => !['trending', 'live-now'].includes(section.id))
+          .map((section, sectionIndex) => (
+            <Animated.View key={section.id} entering={FadeInDown.delay(390 + sectionIndex * 35).duration(360)}>
+              <SectionHeader title={section.title} icon={section.type === 'channel' ? 'live-tv' : 'auto-awesome'} iconColor={section.type === 'channel' ? theme.live : theme.primary} isRTL={isRTL} />
+              <HorizontalShelf isRTL={isRTL}>
+                {section.items.map((item: any) =>
+                  item.type === 'channel' ? (
+                    <Pressable key={item.id} style={styles.liveCard} onPress={() => openChannel(item)}>
+                      <View style={styles.liveImageWrap}>
+                        <Image source={{ uri: item.logo }} style={styles.liveLogo} contentFit="cover" transition={200} />
+                        <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>{copy.live}</Text></View>
+                      </View>
+                      <Text style={styles.liveChannelName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.liveProgram} numberOfLines={1}>{item.current_program}</Text>
+                      <Text style={styles.liveViewers}>{formatViewers(item.live_viewers ?? item.viewers)} {copy.watching}</Text>
+                    </Pressable>
+                  ) : (
+                    <ContentCard key={item.id} item={item} onPress={() => navigateToContent(item)} />
+                  )
+                )}
+              </HorizontalShelf>
+            </Animated.View>
+          ))}
 
         {channelCategoryShelves.map((section, sectionIndex) => (
           <Animated.View key={section.id} entering={FadeInDown.delay(430 + sectionIndex * 40).duration(380)}>
