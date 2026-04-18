@@ -13,6 +13,7 @@ interface AppState {
   allMovies: ContentItem[];
   channels: Channel[];
   activeRooms: WatchRoom[];
+  dynamicSections: api.DynamicHomeSection[];
   favorites: string[];
   watchHistory: WatchHistory[];
   
@@ -44,6 +45,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [allMovies, setAllMovies] = useState<ContentItem[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [activeRooms, setActiveRooms] = useState<WatchRoom[]>([]);
+  const [dynamicSections, setDynamicSections] = useState<api.DynamicHomeSection[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [watchHistory, setWatchHistory] = useState<WatchHistory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,12 +94,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setBanners(bannersData);
       applyViewerCounts(movies, series, channelsData, viewerCounts);
       setActiveRooms(rooms);
+      setDynamicSections(await api.fetchDynamicHomeSections(user?.id).catch(() => []));
     } catch (err) {
       console.error('Failed to load home data:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   const loadUserData = useCallback(async () => {
     if (!user?.id) {
@@ -200,6 +203,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       allMovies,
       channels,
       activeRooms,
+      dynamicSections,
       favorites,
       watchHistory,
       loading,
