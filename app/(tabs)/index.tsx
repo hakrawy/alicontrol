@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import {
   View, Text, ScrollView, Pressable, Dimensions, StyleSheet, TextInput,
   NativeSyntheticEvent, NativeScrollEvent, ActivityIndicator, RefreshControl,
@@ -11,15 +11,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
+import { config } from '../../constants/config';
 import { useAppContext } from '../../contexts/AppContext';
 import { formatViewers } from '../../services/api';
 import type { ContentItem, Banner, WatchHistory } from '../../services/api';
 import * as api from '../../services/api';
 import { useAuth } from '@/template';
 import { useLocale } from '../../contexts/LocaleContext';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const HERO_HEIGHT = 460;
+import { buildContentRoute } from '../../services/navigation';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -28,13 +27,15 @@ export default function HomeScreen() {
   const { language, isRTL, direction } = useLocale();
   const {
     banners, trendingMovies, featuredMovies, newContent, allSeries, allMovies,
-    channels, activeRooms, isFavorite, addToFavorites, loading, refreshHome, watchHistory,
+    channels, activeRooms, dynamicSections, isFavorite, addToFavorites, loading, refreshHome, watchHistory,
   } = useAppContext();
   const [activeHero, setActiveHero] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [homeSearch, setHomeSearch] = useState('');
   const [continueWatching, setContinueWatching] = useState<(ContentItem & { progress: number; watch_duration: number })[]>([]);
   const heroRef = useRef<ScrollView>(null);
+  const { width: screenWidth } = (require('react-native') as any).useWindowDimensions();
+  const HERO_HEIGHT = Math.min(460, screenWidth * 0.7);
   const copy = language === 'Arabic'
     ? {
         loading: 'جارٍ تحميل علي كنترول...',
@@ -77,7 +78,7 @@ export default function HomeScreen() {
     if (banners.length === 0) return;
     const interval = setInterval(() => {
       const next = (activeHero + 1) % banners.length;
-      heroRef.current?.scrollTo({ x: next * SCREEN_WIDTH, animated: true });
+      heroRef.current?.scrollTo({ x: next * screenWidth, animated: true });
       setActiveHero(next);
     }, 5000);
     return () => clearInterval(interval);
@@ -88,14 +89,15 @@ export default function HomeScreen() {
     const loadContinue = async () => {
       if (!watchHistory || watchHistory.length === 0) return;
       const inProgress = watchHistory.filter(h => h.duration > 0 && h.progress > 0 && (h.progress / h.duration) < 0.95).slice(0, 6);
-      const items: (ContentItem & { progress: number; watch_duration: number })[] = [];
-      for (const h of inProgress) {
-        try {
-          const content = await api.fetchContentById(h.content_id);
-          if (content) items.push({ ...content, progress: h.progress, watch_duration: h.duration });
-        } catch {}
-      }
-      setContinueWatching(items);
+      const results = await Promise.all(
+        inProgress.map(async (h) => {
+          try {
+            const content = await api.fetchContentById(h.content_id);
+            return content ? { ...content, progress: h.progress, watch_duration: h.duration } : null;
+          } catch { return null; }
+        })
+      );
+      setContinueWatching(results.filter(Boolean) as (ContentItem & { progress: number; watch_duration: number })[]);
     };
     loadContinue();
   }, [watchHistory]);
@@ -107,36 +109,11 @@ export default function HomeScreen() {
   }, [refreshHome]);
 
   const handleHeroScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const index = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
     setActiveHero(index);
   };
 
-  const buildContentRoute = (item: ContentItem) => ({
-    pathname: '/content/[id]' as const,
-    params: {
-      id: item.id,
-      preview: JSON.stringify({
-        id: item.id,
-        type: item.type,
-        title: item.title,
-        description: item.description,
-        poster: item.poster,
-        backdrop: item.backdrop,
-        genre: item.genre,
-        rating: item.rating,
-        year: item.year,
-        cast_members: item.cast_members,
-        quality: item.type === 'movie' ? (item as any).quality : ['Auto'],
-        stream_url: item.type === 'movie' ? (item as any).stream_url : '',
-        stream_sources: item.type === 'movie' ? (item as any).stream_sources || [] : [],
-        subtitle_url: item.type === 'movie' ? (item as any).subtitle_url : '',
-        is_new: item.is_new,
-        is_exclusive: item.is_exclusive,
-        live_viewers: item.live_viewers,
-        view_count: item.view_count,
-      }),
-    },
-  });
+
 
   const navigateToContent = (item: ContentItem) => {
     Haptics.selectionAsync();
@@ -158,6 +135,32 @@ export default function HomeScreen() {
   };
 
   const featuredChannels = channels.filter(c => c.is_featured && c.is_live);
+  const movieCategoryShelves = useMemo(
+    () =>
+      config.categories
+        .map((category) => ({
+          ...category,
+          items: allMovies.filter((movie) =>
+            movie.category_id === category.id ||
+            (movie.genre || []).some((genre) => String(genre).toLowerCase().includes(category.name.toLowerCase()))
+          ).slice(0, 12),
+        }))
+        .filter((section) => section.items.length > 0)
+        .slice(0, 3),
+    [allMovies]
+  );
+  const channelCategoryShelves = useMemo(
+    () =>
+      config.liveCategories
+        .filter((category) => category.id !== 'all')
+        .map((category) => ({
+          ...category,
+          items: channels.filter((channel) => channel.is_live && String(channel.category || '').toLowerCase() === category.id).slice(0, 10),
+        }))
+        .filter((section) => section.items.length > 0)
+        .slice(0, 3),
+    [channels]
+  );
 
   if (loading) {
     return (
@@ -201,7 +204,7 @@ export default function HomeScreen() {
                   const target = [...allMovies, ...allSeries].find((item) => item.id === banner.content_id);
                   if (target) navigateToContent(target);
                   else if (banner.content_id) router.push(`/content/${banner.content_id}`);
-                }} style={{ width: SCREEN_WIDTH, height: HERO_HEIGHT }}>
+                }} style={{ width: screenWidth, height: HERO_HEIGHT }}>
                   <Image source={{ uri: banner.backdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
                   <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)', 'rgba(10,10,15,0.85)', theme.background]} style={StyleSheet.absoluteFill} locations={[0, 0.4, 0.7, 1]} />
                   <View style={[styles.heroContent, { paddingTop: insets.top + 40 }]}>
@@ -275,7 +278,7 @@ export default function HomeScreen() {
             <SectionHeader title={copy.trending} icon="trending-up" isRTL={isRTL} />
             <HorizontalShelf isRTL={isRTL}>
               {trendingMovies.map((item, index) => (
-                <Pressable key={item.id} onPress={() => navigateToContent(item.id)} style={styles.trendingCard}>
+                <Pressable key={item.id} onPress={() => navigateToContent(item)} style={styles.trendingCard}>
                   <View style={styles.trendingNumberWrap}>
                     <Text style={styles.trendingNumber}>{index + 1}</Text>
                   </View>
@@ -297,6 +300,17 @@ export default function HomeScreen() {
             </HorizontalShelf>
           </Animated.View>
         ) : null}
+
+        {movieCategoryShelves.map((section, sectionIndex) => (
+          <Animated.View key={section.id} entering={FadeInDown.delay(220 + sectionIndex * 40).duration(380)}>
+            <SectionHeader title={`${section.name} ${language === 'Arabic' ? 'مختارات' : 'Picks'}`} icon={section.icon as any} isRTL={isRTL} />
+            <HorizontalShelf isRTL={isRTL}>
+              {section.items.map((movie) => (
+                <ContentCard key={movie.id} item={movie} onPress={() => navigateToContent(movie)} />
+              ))}
+            </HorizontalShelf>
+          </Animated.View>
+        ))}
 
         {/* New Releases */}
         {newContent.length > 0 ? (
@@ -341,6 +355,50 @@ export default function HomeScreen() {
             </HorizontalShelf>
           </Animated.View>
         ) : null}
+
+        {dynamicSections
+          .filter((section) => !['trending', 'live-now'].includes(section.id))
+          .map((section, sectionIndex) => (
+            <Animated.View key={section.id} entering={FadeInDown.delay(390 + sectionIndex * 35).duration(360)}>
+              <SectionHeader title={section.title} icon={section.type === 'channel' ? 'live-tv' : 'auto-awesome'} iconColor={section.type === 'channel' ? theme.live : theme.primary} isRTL={isRTL} />
+              <HorizontalShelf isRTL={isRTL}>
+                {section.items.map((item: any) =>
+                  item.type === 'channel' ? (
+                    <Pressable key={item.id} style={styles.liveCard} onPress={() => openChannel(item)}>
+                      <View style={styles.liveImageWrap}>
+                        <Image source={{ uri: item.logo }} style={styles.liveLogo} contentFit="cover" transition={200} />
+                        <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>{copy.live}</Text></View>
+                      </View>
+                      <Text style={styles.liveChannelName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.liveProgram} numberOfLines={1}>{item.current_program}</Text>
+                      <Text style={styles.liveViewers}>{formatViewers(item.live_viewers ?? item.viewers)} {copy.watching}</Text>
+                    </Pressable>
+                  ) : (
+                    <ContentCard key={item.id} item={item} onPress={() => navigateToContent(item)} />
+                  )
+                )}
+              </HorizontalShelf>
+            </Animated.View>
+          ))}
+
+        {channelCategoryShelves.map((section, sectionIndex) => (
+          <Animated.View key={section.id} entering={FadeInDown.delay(430 + sectionIndex * 40).duration(380)}>
+            <SectionHeader title={`${section.name} ${language === 'Arabic' ? 'مباشر' : 'Live'}`} icon="live-tv" iconColor={theme.live} isRTL={isRTL} />
+            <HorizontalShelf isRTL={isRTL}>
+              {section.items.map((ch) => (
+                <Pressable key={ch.id} style={styles.liveCard} onPress={() => openChannel(ch)}>
+                  <View style={styles.liveImageWrap}>
+                    <Image source={{ uri: ch.logo }} style={styles.liveLogo} contentFit="cover" transition={200} />
+                    <View style={styles.liveBadge}><View style={styles.liveDot} /><Text style={styles.liveText}>{copy.live}</Text></View>
+                  </View>
+                  <Text style={styles.liveChannelName} numberOfLines={1}>{ch.name}</Text>
+                  <Text style={styles.liveProgram} numberOfLines={1}>{ch.current_program}</Text>
+                  <Text style={styles.liveViewers}>{formatViewers(ch.live_viewers ?? ch.viewers)} {copy.watching}</Text>
+                </Pressable>
+              ))}
+            </HorizontalShelf>
+          </Animated.View>
+        ))}
 
         {/* Watch Rooms */}
         {activeRooms.length > 0 ? (

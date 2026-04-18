@@ -44,10 +44,9 @@ jobs:
         run: npx expo export -p web
 
       - name: Add static hosting fallbacks
-        shell: pwsh
         run: |
-          Copy-Item dist/index.html dist/404.html -Force
-          New-Item -ItemType File -Path dist/.nojekyll -Force | Out-Null
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

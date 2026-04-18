@@ -254,6 +254,13 @@ const ar: Record<TranslationKey, string> = {
   'settings.saveFailedDesc': 'تعذر تحديث ملفك الشخصي حاليًا.',
   'settings.missingUsername': 'اسم المستخدم مطلوب',
   'settings.missingUsernameDesc': 'أضف اسم مستخدم قبل الحفظ.',
+  'options.english': 'الإنجليزية',
+  'options.arabic': 'العربية',
+  'options.none': 'بدون',
+  'options.small': 'صغير',
+  'options.medium': 'متوسط',
+  'options.large': 'كبير',
+  'options.auto': 'تلقائي',
 };
 
 export function translate(language: string, key: TranslationKey) {
@@ -285,8 +292,9 @@ export function localizePreferenceValue(language: string, value: string) {
 
   const mappedKey = keyMap[normalized];
   if (!mappedKey) return value;
-  if (language === 'Arabic' && mappedKey in arabicOptionLabels) {
-    return arabicOptionLabels[mappedKey] ?? value;
+  if (language === 'Arabic') {
+    const localized = arabicOptionLabels[mappedKey as keyof typeof arabicOptionLabels];
+    if (localized) return localized;
   }
   return translate(language, mappedKey);
 }

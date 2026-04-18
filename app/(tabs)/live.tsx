@@ -56,7 +56,9 @@ export default function LiveScreen() {
 
   const filtered = useMemo(() => {
     const live = channels.filter(c => c.is_live);
-    const byCategory = activeCategory === 'all' ? live : live.filter(c => c.category === activeCategory);
+    const byCategory = activeCategory === 'all'
+      ? live
+      : live.filter((channel) => String(channel.category || '').toLowerCase() === activeCategory);
     if (!searchQuery.trim()) return byCategory;
     return byCategory.filter((channel) => {
       const haystack = `${channel.name} ${channel.category} ${channel.current_program}`.toLowerCase();
@@ -137,7 +139,7 @@ export default function LiveScreen() {
                   <Text style={styles.channelName} numberOfLines={1}>{ch.name}</Text>
                   <Text style={styles.channelProgram} numberOfLines={1}>{ch.current_program}</Text>
                   <View style={styles.channelMeta}>
-                    <View style={styles.channelCatBadge}><Text style={styles.channelCatText}>{ch.category.toUpperCase()}</Text></View>
+                    <View style={styles.channelCatBadge}><Text style={styles.channelCatText}>{String(ch.category || 'all').toUpperCase()}</Text></View>
                     <Text style={styles.channelViewers}>{formatViewers(ch.live_viewers ?? ch.viewers)} watching</Text>
                   </View>
                 </View>

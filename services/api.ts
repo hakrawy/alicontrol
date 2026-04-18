@@ -1,4 +1,4 @@
-﻿import { getSupabaseClient } from '@/template';
+import { getSupabaseClient } from '@/template';
 
 const supabase = getSupabaseClient();
 
@@ -117,8 +117,10 @@ export interface AddonImportSummary {
   importedMovies: number;
   importedSeries: number;
   importedEpisodes: number;
+  importedChannels: number;
   mergedMovies: number;
   mergedSeries: number;
+  mergedChannels: number;
   skipped: number;
   errors: string[];
 }
@@ -134,13 +136,15 @@ export interface AddonRepairSummary {
 interface AddonExternalRef {
   id: string;
   addon_id: string;
-  content_type: 'movie' | 'series' | 'episode';
+  content_type: 'movie' | 'series' | 'episode' | 'channel';
   content_id: string;
   external_type: string;
   external_id: string;
   imdb_id?: string | null;
   title?: string | null;
   year?: number | null;
+  season_number?: number;
+  episode_number?: number;
   meta_json?: any;
 }
 
@@ -156,6 +160,8 @@ interface PlaybackLookupIdentity {
   tmdb_id?: string | null;
   title?: string;
   year?: number | null;
+  season_number?: number;
+  episode_number?: number;
 }
 
 export interface M3UEntry {
@@ -395,6 +401,26 @@ export interface ActiveViewerSession {
 }
 
 export type ContentItem = (Movie | Series) & { type: 'movie' | 'series' };
+export type SearchResultItem = ContentItem | (Channel & { type: 'channel' });
+export interface IntelligentSource extends StreamSource {
+  healthScore: number;
+  stability: 'excellent' | 'good' | 'fair' | 'poor';
+  autoSelected?: boolean;
+}
+
+export interface DynamicHomeSection {
+  id: string;
+  title: string;
+  type: 'movie' | 'series' | 'channel' | 'mixed';
+  items: SearchResultItem[];
+}
+
+export interface RuntimeContentInsight {
+  addonNames: string[];
+  sourceCount: number;
+  bestSource: IntelligentSource | null;
+  subtitleCount: number;
+}
 
 function isStreamSource(value: unknown): value is StreamSource {
   return Boolean(
@@ -745,7 +771,7 @@ function normalizeAddonConfigField(rawField: any, index: number): AddonConfigFie
         typeof option === 'string'
           ? { label: option, value: option }
           : { label: String(option?.label || option?.name || option?.value || ''), value: String(option?.value || option?.name || option?.label || '') }
-      ).filter((option) => option.label && option.value)
+      ).filter((option: { label: string; value: string }) => option.label && option.value)
     : undefined;
 
   return {
@@ -1219,10 +1245,12 @@ export async function importSeriesFromM3UUrl(playlistUrl: string) {
         is_published: true,
       });
       seriesId = created.id;
+      if (!seriesId) continue;
       seriesMap.set(tokens.seriesTitle, { id: seriesId, title: tokens.seriesTitle });
       importedSeries += 1;
     }
 
+    if (!seriesId) continue;
     const seasonKey = `${seriesId}:${tokens.seasonNumber}`;
     let seasonId = seasonMap.get(seasonKey);
 
@@ -1233,8 +1261,10 @@ export async function importSeriesFromM3UUrl(playlistUrl: string) {
         title: `Season ${tokens.seasonNumber}`,
       });
       seasonId = season.id;
-      seasonMap.set(seasonKey, seasonId);
+      if (seasonId) seasonMap.set(seasonKey, seasonId);
     }
+
+    if (!seriesId || !seasonId) continue;
 
     await upsertEpisode({
       season_id: seasonId,
@@ -1626,98 +1656,48 @@ export async function repairAddonSeriesEpisodes(addonId: string) {
 }
 
 export async function importAddonContent(addonId: string) {
-  const { data, error } = await supabase.from('addons').select('*').eq('id', addonId).single();
-  if (error) throw error;
-  const addon = normalizeAddonRecord(data);
-  const addonKind = inferAddonKind(addon);
+  const stremioApi = await import('./stremio');
+  return stremioApi.importAddonContent(addonId);
+}
 
-  const summary: AddonImportSummary = {
-    addonName: addon.name,
-    importedMovies: 0,
-    importedSeries: 0,
-    importedEpisodes: 0,
-    mergedMovies: 0,
-    mergedSeries: 0,
-    skipped: 0,
-    errors: [],
-  };
+function computeSourceHealth(source: StreamSource): IntelligentSource {
+  const qualityRank = (() => {
+    const value = String(source.quality || '').toLowerCase();
+    if (value.includes('4k') || value.includes('2160')) return 30;
+    if (value.includes('1440')) return 25;
+    if (value.includes('1080')) return 20;
+    if (value.includes('720')) return 15;
+    if (value.includes('480')) return 10;
+    return 6;
+  })();
+  const responseRank = Number.isFinite(source.responseTimeMs as number)
+    ? Math.max(0, 30 - Math.min(30, Math.floor((source.responseTimeMs as number) / 120)))
+    : 12;
+  const statusRank = source.status === 'working' || source.isWorking ? 28 : source.status === 'unknown' ? 18 : source.status === 'failing' ? 6 : 2;
+  const proxyPenalty = source.proxyRequired ? -6 : 0;
+  const priorityBonus = Math.max(-2, Math.min(12, (source.priority || 0) * 2));
+  const healthScore = Math.max(1, qualityRank + responseRank + statusRank + proxyPenalty + priorityBonus);
+  const stability: IntelligentSource['stability'] =
+    healthScore >= 72 ? 'excellent'
+      : healthScore >= 54 ? 'good'
+      : healthScore >= 34 ? 'fair'
+      : 'poor';
+  return { ...source, healthScore, stability };
+}
 
-  if (addonKind === 'stream') {
-    summary.skipped = 1;
-    summary.errors.push('This add-on is stream-only. It is saved as a playback provider and does not import catalogs.');
-    await updateAddon(addon.id, { last_imported_at: new Date().toISOString() } as any);
-    return summary;
-  }
+export function rankStreamingSources(sources: StreamSource[]): IntelligentSource[] {
+  return uniqueSources(sources)
+    .map(computeSourceHealth)
+    .sort((a, b) =>
+      (b.healthScore - a.healthScore) ||
+      ((b.priority || 0) - (a.priority || 0)) ||
+      ((a.responseTimeMs || Number.MAX_SAFE_INTEGER) - (b.responseTimeMs || Number.MAX_SAFE_INTEGER))
+    )
+    .map((source, index) => ({ ...source, autoSelected: index === 0 }));
+}
 
-  for (const catalog of addon.catalogs || []) {
-    if (!catalog?.id || !catalog?.type) continue;
-    const localType = inferLocalContentType({ catalogId: catalog.id, catalogType: catalog.type, name: catalog.name });
-
-    try {
-      const metas = await fetchAddonCatalogItems(addon, catalog);
-      for (const meta of metas) {
-        try {
-          if (localType === 'movie') {
-            const movie = await resolveOrCreateMovieForAddon(meta);
-            if (movie.merged) summary.mergedMovies += 1;
-            else summary.importedMovies += 1;
-
-            await upsertExternalRef({
-              addon_id: addon.id,
-              content_type: 'movie',
-              content_id: movie.id,
-              external_type: catalog.type,
-              external_id: meta.id,
-              imdb_id: movie.imdbId,
-              title: movie.title,
-              year: movie.year,
-              meta_json: meta,
-            });
-            continue;
-          }
-
-          const series = await resolveOrCreateSeriesForAddon(meta);
-          if (series.merged) summary.mergedSeries += 1;
-          else summary.importedSeries += 1;
-
-          await upsertExternalRef({
-            addon_id: addon.id,
-            content_type: 'series',
-            content_id: series.id,
-            external_type: catalog.type,
-            external_id: meta.id,
-            imdb_id: series.imdbId,
-            title: series.title,
-            year: series.year,
-            meta_json: meta,
-          });
-
-          try {
-            const fullMeta = await fetchAddonMeta(addon, catalog.type, meta.id);
-            if (Array.isArray(fullMeta?.videos)) {
-              for (const [videoIndex, video] of fullMeta.videos.entries()) {
-                await ensureSeriesEpisode(addon, series.id, catalog.type, video, videoIndex);
-                summary.importedEpisodes += 1;
-              }
-              await updateSeriesCounts(series.id);
-            }
-          } catch {
-            // Some add-ons do not expose meta videos; keep the series imported without episodes.
-          }
-        } catch (itemError: any) {
-          summary.skipped += 1;
-          if (summary.errors.length < 10) {
-            summary.errors.push(`${meta?.name || meta?.id || 'Unknown item'}: ${itemError?.message || 'Import failed'}`);
-          }
-        }
-      }
-    } catch (catalogError: any) {
-      summary.errors.push(`${catalog.name || catalog.id}: ${catalogError?.message || 'Catalog request failed'}`);
-    }
-  }
-
-  await updateAddon(addon.id, { last_imported_at: new Date().toISOString() } as any);
-  return summary;
+export function pickBestStreamingSource(sources: StreamSource[]): IntelligentSource | null {
+  return rankStreamingSources(sources)[0] || null;
 }
 
 export async function fetchPlaybackSourcesForContent(
@@ -1800,12 +1780,16 @@ export async function resolvePlayableMediaForContent(input: {
   if (input.contentType === 'episode') {
     const episode = await fetchEpisodeById(input.contentId);
     const parentSeries = await fetchSeriesById(episode.series_id).catch(() => null);
+    const seasonResult = await supabase.from('seasons').select('number').eq('id', episode.season_id).single();
+    const seasonRecord = seasonResult.error ? { data: null } : seasonResult;
     const addonSources = await fetchPlaybackSourcesForContent('episode', episode.id, {
       id: episode.id,
       imdb_id: parentSeries?.imdb_id || null,
       tmdb_id: parentSeries?.tmdb_id || null,
       title: episode.title,
       year: parentSeries?.year || null,
+      season_number: seasonRecord.data?.number || null,
+      episode_number: episode.number,
     }).catch(() => []);
     const sources = sortSourcesForPlayback(uniqueSources([...(episode.stream_sources || []), ...addonSources]));
     const url = sources[0]?.url || episode.stream_url;
@@ -2617,6 +2601,69 @@ export async function searchContent(query: string) {
   ] as ContentItem[];
 }
 
+export async function searchCatalog(query: string): Promise<SearchResultItem[]> {
+  const q = `%${query}%`;
+  const [{ data: moviesData }, { data: seriesData }, { data: channelsData }, addonRuntime] = await Promise.all([
+    supabase.from('movies').select('*').eq('is_published', true).or(`title.ilike.${q},description.ilike.${q}`),
+    supabase.from('series').select('*').eq('is_published', true).or(`title.ilike.${q},description.ilike.${q}`),
+    supabase.from('channels').select('*').or(`name.ilike.${q},category.ilike.${q},current_program.ilike.${q}`),
+    import('./stremio').then((stremio) => stremio.searchAddonRuntime(query, 18)).catch(() => []),
+  ]);
+
+  const movies = (moviesData || []).map((m: any) => normalizeMovie(m)) as ContentItem[];
+  const series = (seriesData || []).map((s: any) => normalizeSeries(s)) as ContentItem[];
+  const channels = (channelsData || []).map((channel: any) => ({ ...normalizeChannel(channel), type: 'channel' as const }));
+  const addonResults: SearchResultItem[] = (addonRuntime || []).map((item: any) =>
+    item.type === 'channel'
+      ? ({
+          id: item.id,
+          type: 'channel',
+          name: item.title,
+          logo: item.poster,
+          stream_url: '',
+          stream_sources: [],
+          category: item.category || 'entertainment',
+          current_program: item.description || item.addonName,
+          is_live: true,
+          is_featured: false,
+          viewers: 0,
+          sort_order: 999,
+          runtime_source: item.addonName,
+        } as any)
+      : ({
+          id: item.id,
+          type: item.type,
+          title: item.title,
+          description: item.description || '',
+          poster: item.poster || '',
+          backdrop: item.backdrop || item.poster || '',
+          trailer_url: '',
+          genre: item.genre || [],
+          rating: 0,
+          year: item.year || new Date().getFullYear(),
+          cast_members: [],
+          is_featured: false,
+          is_trending: false,
+          is_new: true,
+          is_exclusive: false,
+          is_published: true,
+          view_count: 0,
+          live_viewers: 0,
+          category_id: item.category || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          quality: ['Auto'],
+          duration: '',
+          subtitle_url: '',
+          stream_url: '',
+          stream_sources: [],
+          runtime_source: item.addonName,
+        } as any)
+  );
+
+  return [...movies, ...series, ...channels, ...addonResults];
+}
+
 // ===== CHANNELS =====
 export async function fetchChannels(category?: string) {
   let query = supabase.from('channels').select('*').order('sort_order');
@@ -2798,6 +2845,68 @@ export async function fetchAppSettings() {
 export async function updateAppSetting(key: string, value: string) {
   const { error } = await supabase.from('app_settings').update({ value, updated_at: new Date().toISOString() }).eq('key', key);
   if (error) throw error;
+  if (key === 'tmdb_api_key') tmdbCredentialCache = null;
+}
+
+export async function fetchDynamicHomeSections(userId?: string): Promise<DynamicHomeSection[]> {
+  const [movies, series, channels, history] = await Promise.all([
+    fetchMovies({ limit: 30 }).catch(() => []),
+    fetchSeries({ limit: 30 }).catch(() => []),
+    fetchChannels().catch(() => []),
+    userId ? fetchWatchHistory(userId).catch(() => []) : Promise.resolve([] as WatchHistory[]),
+  ]);
+
+  const combined = [...movies, ...series];
+  const favoriteGenre = (() => {
+    const counts = new Map<string, number>();
+    history.forEach((entry) => {
+      const match = combined.find((item) => item.id === entry.content_id);
+      (match?.genre || []).forEach((genre) => counts.set(genre, (counts.get(genre) || 0) + 1));
+    });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  })();
+
+  const recommended = favoriteGenre
+    ? combined.filter((item) => (item.genre || []).includes(favoriteGenre)).slice(0, 12)
+    : combined.filter((item) => item.is_featured || item.is_trending).slice(0, 12);
+
+  const newFromAddons = combined.filter((item) => item.is_new).slice(0, 12);
+  const liveNow = channels.filter((channel) => channel.is_live).slice(0, 12).map((channel) => ({ ...channel, type: 'channel' as const }));
+
+  const sections: DynamicHomeSection[] = [
+    { id: 'trending', title: 'Trending', type: 'mixed', items: [...movies, ...series].filter((item) => item.is_trending).slice(0, 12) as SearchResultItem[] },
+    { id: 'recommended', title: favoriteGenre ? `Recommended · ${favoriteGenre}` : 'Recommended', type: 'mixed', items: recommended as SearchResultItem[] },
+    { id: 'new-from-addons', title: 'New from Addons', type: 'mixed', items: newFromAddons as SearchResultItem[] },
+    { id: 'live-now', title: 'Live Now', type: 'channel', items: liveNow as SearchResultItem[] },
+  ];
+
+  return sections.filter((section) => section.items.length > 0);
+}
+
+export async function fetchRuntimeContentInsight(
+  contentType: 'movie' | 'series' | 'episode' | 'channel',
+  contentId: string,
+  identity?: PlaybackLookupIdentity
+): Promise<RuntimeContentInsight> {
+  const [sources, refs] = await Promise.all([
+    contentType === 'channel'
+      ? Promise.resolve([] as StreamSource[])
+      : fetchPlaybackSourcesForContent(contentType, contentId, identity).catch(() => []),
+    supabase.from('content_external_refs').select('addon_id').eq('content_type', contentType === 'episode' ? 'series' : contentType).eq('content_id', contentId),
+  ]);
+
+  const addonIds = Array.from(new Set((refs.data || []).map((ref: any) => ref.addon_id).filter(Boolean)));
+  const addonNames = addonIds.length > 0
+    ? await supabase.from('addons').select('id,name').in('id', addonIds).then(({ data }) => (data || []).map((item: any) => item.name))
+    : [];
+  const ranked = rankStreamingSources(sources);
+  const subtitleCount = ranked.filter((source) => source.subtitle).length;
+  return {
+    addonNames,
+    sourceCount: ranked.length,
+    bestSource: ranked[0] || null,
+    subtitleCount,
+  };
 }
 
 export async function upsertAppSetting(key: string, value: string) {
@@ -2807,10 +2916,13 @@ export async function upsertAppSetting(key: string, value: string) {
   );
   if (error) throw error;
   visibilitySettingsCache = null;
+  if (key === 'tmdb_api_key') tmdbCredentialCache = null;
 }
 
 let visibilitySettingsCache: { value: VisibilitySettings; fetchedAt: number } | null = null;
+let tmdbCredentialCache: { value: string; fetchedAt: number } | null = null;
 const VISIBILITY_CACHE_MS = 60 * 1000;
+const TMDB_CREDENTIAL_CACHE_MS = 5 * 60 * 1000;
 const TMDB_API_BASE = 'https://api.themoviedb.org/3';
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/original';
 const TMDB_API_KEY =
@@ -2827,7 +2939,7 @@ export async function fetchVisibilitySettings(force = false): Promise<Visibility
     return visibilitySettingsCache.value;
   }
 
-  const settings = await fetchAppSettings().catch(() => ({}));
+  const settings: Record<string, string> = await fetchAppSettings().catch(() => ({} as Record<string, string>));
   const normalized = {
     adultSectionEnabled: settings.adult_content_enabled === 'true',
     adultSectionVisible: settings.adult_content_visible === 'true',
@@ -2837,26 +2949,83 @@ export async function fetchVisibilitySettings(force = false): Promise<Visibility
   return normalized;
 }
 
+function looksLikeTmdbReadAccessToken(value: string) {
+  return value.startsWith('eyJ');
+}
+
+async function getTmdbCredential(force = false) {
+  const now = Date.now();
+  if (!force && tmdbCredentialCache && now - tmdbCredentialCache.fetchedAt < TMDB_CREDENTIAL_CACHE_MS) {
+    return tmdbCredentialCache.value;
+  }
+
+  const appSettings = await fetchAppSettings().catch(() => ({} as Record<string, string>));
+  const storedCredential = String(appSettings.tmdb_api_key || '').trim();
+  const credential = storedCredential || String(TMDB_API_KEY || '').trim();
+  tmdbCredentialCache = { value: credential, fetchedAt: now };
+  return credential;
+}
+
 async function tmdbRequest<T>(path: string, params?: Record<string, string | number | undefined | null>): Promise<T> {
-  if (!TMDB_API_KEY) {
-    throw new Error('EXPO_PUBLIC_TMDB_API_KEY is not configured.');
+  const credential = await getTmdbCredential();
+  if (!credential) {
+    throw new Error('TMDB credential is not configured.');
   }
 
   const url = new URL(`${TMDB_API_BASE}${path}`);
-  url.searchParams.set('api_key', TMDB_API_KEY);
-  url.searchParams.set('language', 'en-US');
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
+  if (looksLikeTmdbReadAccessToken(credential)) {
+    headers.Authorization = `Bearer ${credential}`;
+  } else {
+    url.searchParams.set('api_key', credential);
+  }
 
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') return;
     url.searchParams.set(key, String(value));
   });
 
-  const response = await fetch(url.toString());
+  if (!url.searchParams.has('language')) {
+    url.searchParams.set('language', 'en-US');
+  }
+
+  const response = await fetch(url.toString(), { headers });
   if (!response.ok) {
     throw new Error(`TMDB request failed (${response.status})`);
   }
 
   return response.json() as Promise<T>;
+}
+
+export async function validateTmdbCredential(rawCredential: string) {
+  const credential = rawCredential.trim();
+  if (!credential) {
+    throw new Error('Missing TMDB credential.');
+  }
+
+  const url = new URL(`${TMDB_API_BASE}/movie/550`);
+  url.searchParams.set('language', 'en-US');
+  const headers: Record<string, string> = { Accept: 'application/json' };
+
+  if (looksLikeTmdbReadAccessToken(credential)) {
+    headers.Authorization = `Bearer ${credential}`;
+  } else {
+    url.searchParams.set('api_key', credential);
+  }
+
+  const response = await fetch(url.toString(), { headers });
+  if (!response.ok) {
+    throw new Error(`TMDB validation failed (${response.status})`);
+  }
+
+  const data = await response.json();
+  return {
+    ok: Boolean(data?.id),
+    mode: looksLikeTmdbReadAccessToken(credential) ? 'token' as const : 'api_key' as const,
+  };
 }
 
 export async function searchTMDB(query: string, mediaType: 'movie' | 'tv' | 'multi' = 'multi') {
@@ -3149,11 +3318,13 @@ export async function upsertChannel(channel: Partial<Channel>) {
     stream_url: serializeStreamSources(stream_sources, rest.stream_url),
   };
   if (id) {
-    const { error } = await supabase.from('channels').update(payload).eq('id', id);
+    const { data, error } = await supabase.from('channels').update(payload).eq('id', id).select().single();
     if (error) throw error;
+    return data;
   } else {
-    const { error } = await supabase.from('channels').insert(payload);
+    const { data, error } = await supabase.from('channels').insert(payload).select().single();
     if (error) throw error;
+    return data;
   }
 }
 
@@ -3204,3 +3375,4 @@ export function formatViewers(count: number): string {
   return count.toString();
 }
 
+export * from './stremio';

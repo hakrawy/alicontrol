@@ -82,6 +82,7 @@ export default function ContentDetailScreen() {
   const [selectedSeason, setSelectedSeason] = useState(0);
   const [loading, setLoading] = useState(!previewContent);
   const [relatedContent, setRelatedContent] = useState<ContentItem[]>([]);
+  const [runtimeInsight, setRuntimeInsight] = useState<api.RuntimeContentInsight | null>(null);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [playbackSources, setPlaybackSources] = useState<StreamSource[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
@@ -144,7 +145,8 @@ export default function ContentDetailScreen() {
         const related = all
           .filter((candidate) => {
             const candidateGenres = Array.isArray(candidate.genre) ? candidate.genre.filter(Boolean) : [];
-            return candidate.id !== content.id && candidateGenres.some((genre) => sourceGenres.includes(genre));
+            const sameCategory = (candidate as any).category_id && (candidate as any).category_id === (content as any).category_id;
+            return candidate.id !== content.id && (sameCategory || candidateGenres.some((genre) => sourceGenres.includes(genre)));
           })
           .slice(0, 6);
         if (!cancelled) {
@@ -158,6 +160,40 @@ export default function ContentDetailScreen() {
     };
 
     void loadRelated();
+    return () => {
+      cancelled = true;
+    };
+  }, [content]);
+
+  useEffect(() => {
+    if (!content) return;
+
+    let cancelled = false;
+    const loadRuntimeInsight = async () => {
+      try {
+        const insight = await api.fetchRuntimeContentInsight(
+          content.type,
+          content.id,
+          {
+            id: content.id,
+            imdb_id: content.imdb_id,
+            tmdb_id: content.tmdb_id,
+            title: content.title,
+            year: content.year,
+          }
+        );
+
+        if (!cancelled) {
+          setRuntimeInsight(insight);
+        }
+      } catch {
+        if (!cancelled) {
+          setRuntimeInsight(null);
+        }
+      }
+    };
+
+    void loadRuntimeInsight();
     return () => {
       cancelled = true;
     };
@@ -201,6 +237,17 @@ export default function ContentDetailScreen() {
     : isMovie
       ? (movieData.stream_sources?.length || 0)
       : normalizedSeasons.reduce((sum, season) => sum + (season.episodes || []).reduce((epSum, ep) => epSum + (ep.stream_sources?.length || (ep.stream_url ? 1 : 0)), 0), 0);
+  const runtimeAddonLabel = runtimeInsight?.addonNames?.length
+    ? runtimeInsight.addonNames.slice(0, 3).join(' • ')
+    : 'Local library only';
+  const runtimeBestSourceLabel = runtimeInsight?.bestSource
+    ? [runtimeInsight.bestSource.addon || runtimeInsight.bestSource.server || runtimeInsight.bestSource.label, runtimeInsight.bestSource.quality || 'Auto']
+        .filter(Boolean)
+        .join(' • ')
+    : 'Auto routing will pick the best source';
+  const runtimeHealthLabel = runtimeInsight?.bestSource
+    ? `${runtimeInsight.bestSource.healthScore}% healthy`
+    : 'Scanning playback graph';
   const availableQualityLabel = isMovie
     ? (movieData.quality?.filter(Boolean)?.join(' • ') || 'Auto')
     : Array.from(new Set(normalizedSeasons.flatMap((season) => (season.episodes || []).flatMap((episode) => (episode.stream_sources || []).map((source) => source.quality || 'Auto'))))).join(' • ') || 'Auto';
@@ -326,7 +373,7 @@ export default function ContentDetailScreen() {
     });
   };
 
-  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null } }) => {
+  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null; season_number?: number; episode_number?: number } }) => {
     setSourcesLoading(true);
     try {
       const addonSources = await api.fetchPlaybackSourcesForContent(target.contentType, target.contentId, target.identity).catch(() => []);
@@ -335,7 +382,7 @@ export default function ContentDetailScreen() {
         : target.fallbackUrl
           ? [{ label: 'Server 1', url: target.fallbackUrl }]
           : [];
-      const combinedSources = api.parseStreamSources(JSON.stringify([...fallbackSources, ...addonSources]));
+      const combinedSources = api.rankStreamingSources(api.parseStreamSources(JSON.stringify([...fallbackSources, ...addonSources])));
       if (combinedSources.length === 0) {
         showAlert('No sources available', 'No playable sources were found for this title yet.');
         return;
@@ -406,7 +453,7 @@ export default function ContentDetailScreen() {
       title: `${content.title} - ${epTitle}`,
       viewerContentId: content.id,
       viewerContentType: 'series',
-      identity: selectedEpisode ? { id: selectedEpisode.id, title: epTitle, year: seriesData.year } : { id: content.id, title: epTitle, year: seriesData.year },
+      identity: selectedEpisode ? { id: selectedEpisode.id, imdb_id: content.imdb_id as any, tmdb_id: content.tmdb_id as any, title: epTitle, year: seriesData.year, season_number: normalizedSeasons.find(s => (s.episodes||[]).some(e => e.id === selectedEpisode.id))?.number, episode_number: selectedEpisode.number } : { id: content.id, title: epTitle, year: seriesData.year },
     });
   };
 
@@ -516,12 +563,24 @@ export default function ContentDetailScreen() {
               {sourcesLoading ? <ActivityIndicator size="small" color="#000" /> : <MaterialIcons name="play-arrow" size={26} color="#000" />}
               <Text style={styles.playBtnText}>{sourcesLoading ? 'Loading...' : 'Play'}</Text>
             </Pressable>
-            <Pressable style={styles.trailerBtn} onPress={handlePlayTrailer}><MaterialIcons name="movie" size={20} color="#FFF" /><Text style={styles.trailerBtnText}>Trailer</Text></Pressable>
-            {isMovie && movieData.download_url ? (
-              <Pressable style={styles.secondaryActionBtn} onPress={() => void handleDownload(movieData.download_url)}>
-                <MaterialIcons name="download" size={20} color="#FFF" />
-              </Pressable>
-            ) : null}
+            <Pressable style={styles.trailerBtn} onPress={handlePlayTrailer}>
+              <MaterialIcons name="movie" size={20} color="#FFF" />
+              <Text style={styles.trailerBtnText}>Trailer</Text>
+            </Pressable>
+            {/* Download button — always shown, disabled when no URL */}
+            <Pressable
+              style={[
+                styles.secondaryActionBtn,
+                !(isMovie ? movieData.download_url : undefined) && styles.secondaryActionBtnDisabled,
+              ]}
+              onPress={() => void handleDownload(isMovie ? movieData.download_url : undefined)}
+            >
+              <MaterialIcons
+                name="download"
+                size={20}
+                color={isMovie && movieData.download_url ? '#FFF' : 'rgba(255,255,255,0.3)'}
+              />
+            </Pressable>
           </View>
 
           <View style={styles.quickActions}>
@@ -568,6 +627,36 @@ export default function ContentDetailScreen() {
             ) : null}
           </View>
 
+          <Animated.View entering={FadeInDown.delay(120).duration(400)} style={styles.runtimeCard}>
+            <View style={styles.runtimeHeader}>
+              <View>
+                <Text style={styles.sectionLabel}>STREAM INTELLIGENCE</Text>
+                <Text style={styles.runtimeTitle}>Addon runtime is active for this title</Text>
+              </View>
+              <View style={styles.runtimeHealthBadge}>
+                <Text style={styles.runtimeHealthBadgeText}>{runtimeHealthLabel}</Text>
+              </View>
+            </View>
+            <View style={styles.runtimeGrid}>
+              <View style={styles.runtimeMetric}>
+                <Text style={styles.runtimeMetricLabel}>Best Source</Text>
+                <Text style={styles.runtimeMetricValue}>{runtimeBestSourceLabel}</Text>
+              </View>
+              <View style={styles.runtimeMetric}>
+                <Text style={styles.runtimeMetricLabel}>Addons</Text>
+                <Text style={styles.runtimeMetricValue}>{runtimeAddonLabel}</Text>
+              </View>
+              <View style={styles.runtimeMetric}>
+                <Text style={styles.runtimeMetricLabel}>Subtitles</Text>
+                <Text style={styles.runtimeMetricValue}>{runtimeInsight?.subtitleCount || 0} available</Text>
+              </View>
+              <View style={styles.runtimeMetric}>
+                <Text style={styles.runtimeMetricLabel}>Routing</Text>
+                <Text style={styles.runtimeMetricValue}>Auto-select + instant fallback</Text>
+              </View>
+            </View>
+          </Animated.View>
+
           {safeCastMembers.length > 0 ? (
             <Animated.View entering={FadeInDown.delay(100).duration(400)} style={styles.castSection}>
               <Text style={styles.sectionLabel}>CAST</Text>
@@ -597,28 +686,35 @@ export default function ContentDetailScreen() {
                 ))}
               </ScrollView>
               <View style={styles.episodesGrid}>
-                {normalizedSeasons[selectedSeason]?.episodes?.map((ep, index) => (
-                  <Animated.View key={ep.id} entering={FadeInDown.delay(index * 40).duration(300)} style={styles.episodeCardWrap}>
-                    <Pressable style={styles.episodeCard} onPress={() => handlePlayEpisode(ep.stream_url, ep.title, ep.stream_sources || [], ep.subtitle_url)}>
-                      <View style={styles.episodeThumbnailWrap}>
-                        <Image source={{ uri: ep.thumbnail || safePoster }} style={styles.episodeThumbnail} contentFit="cover" transition={200} />
-                        <View style={styles.episodePlayOverlay}><MaterialIcons name="play-circle-filled" size={32} color="rgba(255,255,255,0.9)" /></View>
-                        <View style={styles.episodeDuration}><Text style={styles.episodeDurationText}>{ep.duration || '—'}</Text></View>
-                      </View>
-                      <View style={styles.episodeInfo}>
-                        <Text style={styles.episodeNumber}>Episode {ep.number}</Text>
-                        <Text style={styles.episodeTitle} numberOfLines={2}>{ep.title}</Text>
-                        <Text style={styles.episodeDesc} numberOfLines={3}>{ep.description || 'No episode synopsis yet.'}</Text>
-                        {ep.download_url ? (
-                          <Pressable style={styles.episodeDownloadBtn} onPress={() => void handleDownload(ep.download_url)}>
-                            <MaterialIcons name="download" size={16} color="#FFF" />
-                            <Text style={styles.episodeDownloadText}>Download</Text>
-                          </Pressable>
-                        ) : null}
-                      </View>
-                    </Pressable>
-                  </Animated.View>
-                ))}
+                {(normalizedSeasons[selectedSeason]?.episodes?.length ?? 0) === 0 ? (
+                  <View style={styles.emptyEpisodesWrap}>
+                    <MaterialIcons name="video-library" size={40} color={theme.textMuted} />
+                    <Text style={styles.emptyEpisodesText}>No episodes added yet for this season.</Text>
+                  </View>
+                ) : (
+                  normalizedSeasons[selectedSeason]?.episodes?.map((ep, index) => (
+                    <Animated.View key={ep.id} entering={FadeInDown.delay(index * 40).duration(300)} style={styles.episodeCardWrap}>
+                      <Pressable style={styles.episodeCard} onPress={() => handlePlayEpisode(ep.stream_url, ep.title, ep.stream_sources || [], ep.subtitle_url)}>
+                        <View style={styles.episodeThumbnailWrap}>
+                          <Image source={{ uri: ep.thumbnail || safePoster }} style={styles.episodeThumbnail} contentFit="cover" transition={200} />
+                          <View style={styles.episodePlayOverlay}><MaterialIcons name="play-circle-filled" size={32} color="rgba(255,255,255,0.9)" /></View>
+                          <View style={styles.episodeDuration}><Text style={styles.episodeDurationText}>{ep.duration || '—'}</Text></View>
+                        </View>
+                        <View style={styles.episodeInfo}>
+                          <Text style={styles.episodeNumber}>Episode {ep.number}</Text>
+                          <Text style={styles.episodeTitle} numberOfLines={2}>{ep.title}</Text>
+                          <Text style={styles.episodeDesc} numberOfLines={3}>{ep.description || 'No episode synopsis yet.'}</Text>
+                          {ep.download_url ? (
+                            <Pressable style={styles.episodeDownloadBtn} onPress={() => void handleDownload(ep.download_url)}>
+                              <MaterialIcons name="download" size={16} color="#FFF" />
+                              <Text style={styles.episodeDownloadText}>Download</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    </Animated.View>
+                  ))
+                )}
               </View>
             </Animated.View>
           )}
@@ -729,6 +825,9 @@ const styles = StyleSheet.create({
   trailerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: theme.surfaceLight, height: 52, paddingHorizontal: 24, borderRadius: 12, borderWidth: 1, borderColor: theme.border },
   trailerBtnText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
   secondaryActionBtn: { width: 52, height: 52, borderRadius: 12, backgroundColor: theme.surfaceLight, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.border },
+  secondaryActionBtnDisabled: { opacity: 0.4 },
+  emptyEpisodesWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 40, gap: 12, width: '100%' },
+  emptyEpisodesText: { fontSize: 14, color: theme.textMuted, textAlign: 'center' },
   quickActions: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 24 },
   quickAction: { alignItems: 'center', gap: 6 },
   quickActionText: { fontSize: 11, fontWeight: '500', color: theme.textSecondary },
@@ -746,6 +845,37 @@ const styles = StyleSheet.create({
   },
   detailLabel: { fontSize: 11, fontWeight: '700', color: theme.textMuted, letterSpacing: 0.5, textTransform: 'uppercase' },
   detailValue: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  runtimeCard: {
+    backgroundColor: '#101724',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(99,102,241,0.25)',
+    padding: 16,
+    gap: 14,
+    marginBottom: 24,
+  },
+  runtimeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  runtimeTitle: { fontSize: 15, fontWeight: '700', color: '#FFF', marginTop: 2 },
+  runtimeHealthBadge: {
+    backgroundColor: 'rgba(34,197,94,0.16)',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.35)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  runtimeHealthBadgeText: { fontSize: 11, fontWeight: '800', color: '#BBF7D0', letterSpacing: 0.4 },
+  runtimeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  runtimeMetric: {
+    width: '48%',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  runtimeMetricLabel: { fontSize: 11, fontWeight: '700', color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  runtimeMetricValue: { fontSize: 13, fontWeight: '700', color: '#FFF', lineHeight: 18 },
   sectionLabel: { fontSize: 11, fontWeight: '700', color: theme.textMuted, letterSpacing: 1, marginBottom: 10 },
   castSection: { marginBottom: 20 },
   castList: { fontSize: 14, color: theme.textSecondary, lineHeight: 22 },
