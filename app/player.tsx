@@ -16,7 +16,7 @@ import * as api from '../services/api';
 import { useAppContext } from '../contexts/AppContext';
 
 type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
-type PlayerSource = api.StreamSource;
+type PlayerSource = api.StreamSource & Partial<api.IntelligentSource>;
 
 function getYouTubeVideoId(rawUrl: string): string | null {
   try {
@@ -138,7 +138,7 @@ function buildWebEmbedUrl(rawUrl: string): string {
   return rawUrl;
 }
 
-function parseSourcesParam(rawSources?: string | string[], rawUrl?: string | string[]): PlayerSource[] {
+function parseSourcesParam(rawSources?: string | string[], rawUrl?: string | string[]): api.StreamSource[] {
   const sourcePayload = Array.isArray(rawSources) ? rawSources[0] : rawSources;
   const fallbackUrl = (Array.isArray(rawUrl) ? rawUrl[0] : rawUrl) || '';
 
@@ -193,17 +193,18 @@ function rankQuality(quality?: string) {
 }
 
 function sortSources(sources: PlayerSource[]) {
-  return [...sources].sort((a, b) => {
-    const statusRank = (source: PlayerSource) => source.status === 'working' || source.isWorking ? 3 : source.status === 'unknown' ? 2 : source.status === 'failing' ? 1 : 0;
-    const responseA = Number.isFinite(a.responseTimeMs as number) ? (a.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
-    const responseB = Number.isFinite(b.responseTimeMs as number) ? (b.responseTimeMs as number) : Number.MAX_SAFE_INTEGER;
-    return (
-      ((b.priority ?? 0) - (a.priority ?? 0)) ||
-      (statusRank(b) - statusRank(a)) ||
-      (rankQuality(b.quality) - rankQuality(a.quality)) ||
-      (responseA - responseB)
-    );
-  });
+  return api.rankStreamingSources(sources) as PlayerSource[];
+}
+
+function getSourceHealthMeta(source?: PlayerSource | null) {
+  const score = Math.max(0, Math.min(100, Math.round(source?.healthScore ?? 0)));
+  if (score >= 80) {
+    return { label: `Healthy ${score}%`, tint: '#22C55E', background: 'rgba(34,197,94,0.16)' };
+  }
+  if (score >= 55) {
+    return { label: `Stable ${score}%`, tint: '#F59E0B', background: 'rgba(245,158,11,0.16)' };
+  }
+  return { label: score > 0 ? `Risk ${score}%` : 'Unverified', tint: '#EF4444', background: 'rgba(239,68,68,0.16)' };
 }
 
 function getMediaKindLabel(kind: MediaKind) {
@@ -1219,6 +1220,10 @@ function PlayerScreen() {
   const resolvedUrl = activeSource?.url || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
   const safeTitle = title || 'Now Playing';
   const preferenceKey = `player-preference:${viewerContentType || 'unknown'}:${viewerContentId || safeTitle}`;
+  const sourceHealthMeta = getSourceHealthMeta(activeSource);
+  const sourceIndicatorLabel = [activeSource?.addon || activeSource?.server || activeSource?.label, activeSource?.quality || null]
+    .filter(Boolean)
+    .join(' • ');
 
   useEffect(() => {
     AsyncStorage.getItem('player-cors-proxy').then((res) => {
@@ -1434,8 +1439,10 @@ function PlayerScreen() {
 
   const mediaKind = getMediaKind(resolvedUrl);
 
+  let playerBody: React.ReactNode;
+
   if (mediaKind === 'youtube') {
-    return (
+    playerBody = (
       <EmbeddedPlayer
         embedUrl={buildWebEmbedUrl(resolvedUrl)}
         originalUrl={resolvedUrl}
@@ -1446,10 +1453,8 @@ function PlayerScreen() {
         mediaKind={mediaKind}
       />
     );
-  }
-
-  if (mediaKind === 'direct') {
-    return (
+  } else if (mediaKind === 'direct') {
+    playerBody = (
       <DirectVideoPlayer
         url={resolvedUrl}
         title={safeTitle}
@@ -1472,10 +1477,8 @@ function PlayerScreen() {
         key={`${resolvedUrl}:${selectedSourceIndex}:${retryToken}`}
       />
     );
-  }
-
-  if (mediaKind === 'dash') {
-    return (
+  } else if (mediaKind === 'dash') {
+    playerBody = (
       <DashPlayer
         url={resolvedUrl}
         title={safeTitle}
@@ -1488,16 +1491,8 @@ function PlayerScreen() {
         }}
       />
     );
-  }
-
-  return (
-    <View style={styles.container}>
-      {autoFallbackReason ? (
-        <View style={styles.autoFallbackBanner}>
-          <MaterialIcons name="bolt" size={16} color="#FFF" />
-          <Text style={styles.autoFallbackText}>{autoFallbackReason}</Text>
-        </View>
-      ) : null}
+  } else {
+    playerBody = (
       <EmbeddedPlayer
         embedUrl={buildWebEmbedUrl(resolvedUrl)}
         originalUrl={resolvedUrl}
@@ -1511,6 +1506,25 @@ function PlayerScreen() {
         }}
         mediaKind={mediaKind}
       />
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.streamHealthOverlay, { backgroundColor: sourceHealthMeta.background, borderColor: sourceHealthMeta.tint }]}>
+        <View style={[styles.streamHealthDot, { backgroundColor: sourceHealthMeta.tint }]} />
+        <View style={styles.streamHealthTextWrap}>
+          <Text style={[styles.streamHealthTitle, { color: sourceHealthMeta.tint }]}>{sourceHealthMeta.label}</Text>
+          <Text style={styles.streamHealthSubtitle} numberOfLines={1}>{sourceIndicatorLabel || 'Auto-selected source'}</Text>
+        </View>
+      </View>
+      {autoFallbackReason ? (
+        <View style={styles.autoFallbackBanner}>
+          <MaterialIcons name="bolt" size={16} color="#FFF" />
+          <Text style={styles.autoFallbackText}>{autoFallbackReason}</Text>
+        </View>
+      ) : null}
+      {playerBody}
     </View>
   );
 }
@@ -1580,6 +1594,24 @@ const styles = StyleSheet.create({
   unsupportedHint: { fontSize: 12, color: theme.textMuted, textAlign: 'center' },
   openExternalBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 12, marginTop: 8 },
   openExternalText: { fontSize: 14, fontWeight: '700', color: '#000' },
+  streamHealthOverlay: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 35,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    maxWidth: 260,
+  },
+  streamHealthDot: { width: 10, height: 10, borderRadius: 999 },
+  streamHealthTextWrap: { gap: 2, flexShrink: 1 },
+  streamHealthTitle: { fontSize: 12, fontWeight: '800', letterSpacing: 0.4 },
+  streamHealthSubtitle: { fontSize: 11, color: 'rgba(255,255,255,0.86)' },
   autoFallbackBanner: {
     position: 'absolute',
     top: '30%',
