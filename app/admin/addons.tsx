@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAlert } from '@/template';
 import { theme } from '../../constants/theme';
@@ -12,6 +13,7 @@ type Status = 'healthy' | 'needs_config' | 'warning' | 'error' | 'disabled';
 
 export default function AdminAddons() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { showAlert } = useAlert();
   const { language, direction, isRTL } = useLocale();
   const ar = language === 'Arabic';
@@ -158,6 +160,11 @@ export default function AdminAddons() {
                   <Switch value={addon.enabled} onValueChange={async (value) => { await api.updateAddon(addon.id, { enabled: value } as any); await load(); }} trackColor={{ false: theme.surfaceLight, true: `${theme.primary}55` }} thumbColor={addon.enabled ? theme.primary : theme.textMuted} />
                 </View>
               </View>
+              {kind !== 'stream' ? (
+                <View style={styles.row}>
+                  <Icon icon="swap-horiz" color={theme.primary} onPress={() => router.push({ pathname: '/admin/routing', params: { addonId: addon.id, addonName: addon.name } })} />
+                </View>
+              ) : null}
               <View style={styles.row}>
                 <Icon icon="visibility" color={theme.info} onPress={() => void api.previewAddonImport(addon.id).then((r) => showAlert(t.preview, `${r.addonName}\nM ${r.totals.predictedMovies} • S ${r.totals.predictedSeries} • C ${r.totals.predictedChannels}`))} />
                 <Icon icon="health-and-safety" color={theme.success} onPress={() => void runHealth(addon)} />
