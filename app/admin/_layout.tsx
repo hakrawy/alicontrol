@@ -104,6 +104,7 @@ export default function AdminLayout() {
       <Stack.Screen name="settings" options={{ title: copy.settings,  ...homeBtn }} />
       <Stack.Screen name="addons"   options={{ title: copy.addons,    ...homeBtn }} />
       <Stack.Screen name="sources"  options={{ title: copy.sources,   ...homeBtn }} />
+      <Stack.Screen name="routing"  options={{ title: language === 'Arabic' ? 'توجيه المحتوى' : 'Content Routing', ...homeBtn }} />
     </Stack>
   );
 }
