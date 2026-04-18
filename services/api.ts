@@ -3234,20 +3234,11 @@ export async function fetchAddonImportedReviewItems(addonId: string): Promise<Ad
   return items;
 }
 
-export async function moveAddonImportedItem(
-  refId: string,
-  targetType: 'movie' | 'series' | 'channel'
-) {
-  const { data: ref, error } = await supabase
-    .from('content_external_refs')
-    .select('*')
-    .eq('id', refId)
-    .single();
-
+export async function moveAddonImportedItem(refId: string, targetType: 'movie' | 'series' | 'channel') {
+  const { data: ref, error } = await supabase.from('content_external_refs').select('*').eq('id', refId).single();
   if (error) throw error;
 
   const sourceRef = ref as AddonExternalRef;
-
   if (sourceRef.content_type === targetType) {
     return { moved: false, targetType, title: sourceRef.title || 'Untitled' };
   }
@@ -3258,13 +3249,13 @@ export async function moveAddonImportedItem(
     .eq('id', sourceRef.addon_id)
     .maybeSingle();
 
+  const stremio = await import('./stremio').catch(() => null);
   const snapshot = await fetchContentSnapshotForMove(
     sourceRef.content_type as 'movie' | 'series' | 'channel',
     sourceRef.content_id
   ).catch(() => null) as any;
 
   const identity = buildMoveIdentity(sourceRef, snapshot);
-
   const addonSources =
     sourceRef.content_type === 'channel'
       ? getSnapshotSources(snapshot)
@@ -3276,40 +3267,40 @@ export async function moveAddonImportedItem(
 
   const fallbackSources = getSnapshotSources(snapshot);
   const streamSources = rankStreamingSources(uniqueSources([...fallbackSources, ...addonSources]));
-
   const title = getSnapshotTitle(snapshot, sourceRef.title);
   const description = getSnapshotDescription(snapshot, sourceRef.meta_json);
   const poster = getSnapshotPoster(snapshot, sourceRef.meta_json);
   const backdrop = getSnapshotBackdrop(snapshot, sourceRef.meta_json);
-  const genres = uniqueTextList([
-    ...(snapshot?.genre || []),
-    ...((sourceRef.meta_json?.genres || []) as string[]),
-  ]);
-  const year =
-    snapshot?.year ||
-    sourceRef.year ||
-    toReleaseYear(sourceRef.meta_json?.releaseInfo) ||
-    new Date().getFullYear();
-
+  const genres = uniqueTextList([...(snapshot?.genre || []), ...((sourceRef.meta_json?.genres || []) as string[])]);
+  const qualities = uniqueTextList([...(snapshot?.quality || []), ...streamSources.map((source) => source.quality || 'Auto')]);
+  const bestSource = streamSources[0];
   let targetId = '';
 
   if (targetType === 'channel') {
+    const category = stremio?.predictChannelCategory
+      ? stremio.predictChannelCategory({
+          addon: (addon as any) || undefined,
+          catalog: { type: sourceRef.external_type, id: sourceRef.external_type, name: sourceRef.external_type },
+          meta: sourceRef.meta_json,
+          streams: streamSources,
+        })
+      : 'entertainment';
+
     const existingChannel = await findExistingChannelByIdentity({
       name: title,
-      streamUrl: streamSources[0]?.url || snapshot?.stream_url || '',
-      category: snapshot?.category || sourceRef.meta_json?.groupTitle || 'general',
+      streamUrl: bestSource?.url || snapshot?.stream_url || '',
+      category: snapshot?.category || sourceRef.meta_json?.groupTitle || category || 'general',
     }).catch(() => null);
 
     if (existingChannel?.id) {
       targetId = existingChannel.id;
-
       await upsertChannel({
         id: existingChannel.id,
         name: title,
         logo: poster,
-        stream_url: streamSources[0]?.url || snapshot?.stream_url || '',
+        stream_url: bestSource?.url || snapshot?.stream_url || '',
         stream_sources: streamSources,
-        category: snapshot?.category || sourceRef.meta_json?.groupTitle || 'general',
+        category: snapshot?.category || sourceRef.meta_json?.groupTitle || category || 'general',
         current_program: snapshot?.current_program || 'Now Streaming',
         is_live: true,
         is_featured: Boolean(snapshot?.is_featured),
@@ -3320,16 +3311,15 @@ export async function moveAddonImportedItem(
       const created = await upsertChannel({
         name: title,
         logo: poster,
-        stream_url: streamSources[0]?.url || snapshot?.stream_url || '',
+        stream_url: bestSource?.url || snapshot?.stream_url || '',
         stream_sources: streamSources,
-        category: snapshot?.category || sourceRef.meta_json?.groupTitle || 'general',
+        category: snapshot?.category || sourceRef.meta_json?.groupTitle || category || 'general',
         current_program: snapshot?.current_program || 'Now Streaming',
         is_live: true,
         is_featured: Boolean(snapshot?.is_featured),
         viewers: Number(snapshot?.viewers || 0),
         sort_order: Number(snapshot?.sort_order || 0),
       } as any);
-
       targetId = created.id;
     }
   } else if (targetType === 'movie') {
@@ -3337,12 +3327,11 @@ export async function moveAddonImportedItem(
       imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
       tmdb_id: sourceRef.meta_json?.tmdb_id || null,
       title,
-      year,
+      year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
     }).catch(() => null);
 
     if (existingMovie?.id) {
       targetId = existingMovie.id;
-
       await upsertMovie({
         id: existingMovie.id,
         title,
@@ -3350,15 +3339,15 @@ export async function moveAddonImportedItem(
         poster,
         backdrop,
         trailer_url: snapshot?.trailer_url || '',
-        stream_url: streamSources[0]?.url || snapshot?.stream_url || '',
+        stream_url: bestSource?.url || snapshot?.stream_url || '',
         stream_sources: streamSources,
         genre: genres,
         rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-        year,
+        year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
         duration: snapshot?.duration || '',
         cast_members: snapshot?.cast_members || [],
-        quality: snapshot?.quality || ['Auto'],
-        subtitle_url: snapshot?.subtitle_url || '',
+        quality: qualities.length > 0 ? qualities : ['Auto'],
+        subtitle_url: bestSource?.subtitle || snapshot?.subtitle_url || '',
         is_featured: false,
         is_trending: false,
         is_new: Boolean(snapshot?.is_new),
@@ -3373,15 +3362,15 @@ export async function moveAddonImportedItem(
         poster,
         backdrop,
         trailer_url: snapshot?.trailer_url || '',
-        stream_url: streamSources[0]?.url || snapshot?.stream_url || '',
+        stream_url: bestSource?.url || snapshot?.stream_url || '',
         stream_sources: streamSources,
         genre: genres,
         rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-        year,
+        year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
         duration: snapshot?.duration || '',
         cast_members: snapshot?.cast_members || [],
-        quality: snapshot?.quality || ['Auto'],
-        subtitle_url: snapshot?.subtitle_url || '',
+        quality: qualities.length > 0 ? qualities : ['Auto'],
+        subtitle_url: bestSource?.subtitle || snapshot?.subtitle_url || '',
         is_featured: false,
         is_trending: false,
         is_new: Boolean(snapshot?.is_new),
@@ -3389,7 +3378,6 @@ export async function moveAddonImportedItem(
         is_published: true,
         category_id: snapshot?.category_id || null,
       } as any);
-
       targetId = created.id;
     }
   } else {
@@ -3397,12 +3385,11 @@ export async function moveAddonImportedItem(
       imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
       tmdb_id: sourceRef.meta_json?.tmdb_id || null,
       title,
-      year,
+      year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
     }).catch(() => null);
 
     if (existingSeries?.id) {
       targetId = existingSeries.id;
-
       await upsertSeries({
         id: existingSeries.id,
         title,
@@ -3412,7 +3399,7 @@ export async function moveAddonImportedItem(
         trailer_url: snapshot?.trailer_url || '',
         genre: genres,
         rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-        year,
+        year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
         cast_members: snapshot?.cast_members || [],
         total_seasons: snapshot?.total_seasons || 1,
         total_episodes: snapshot?.total_episodes || 0,
@@ -3433,7 +3420,7 @@ export async function moveAddonImportedItem(
         trailer_url: snapshot?.trailer_url || '',
         genre: genres,
         rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-        year,
+        year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
         cast_members: snapshot?.cast_members || [],
         total_seasons: snapshot?.total_seasons || 1,
         total_episodes: snapshot?.total_episodes || 0,
@@ -3445,7 +3432,6 @@ export async function moveAddonImportedItem(
         is_published: true,
         category_id: snapshot?.category_id || null,
       } as any);
-
       targetId = created.id;
     }
 
@@ -3484,7 +3470,7 @@ export async function moveAddonImportedItem(
       .update({
         content_id: targetId,
         title,
-        year,
+        year: snapshot?.year || sourceRef.year || null,
         imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
         meta_json: sourceRef.meta_json || null,
         updated_at: new Date().toISOString(),
@@ -3506,7 +3492,7 @@ export async function moveAddonImportedItem(
         content_type: targetType,
         content_id: targetId,
         title,
-        year,
+        year: snapshot?.year || sourceRef.year || null,
         imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
         meta_json: sourceRef.meta_json || null,
         updated_at: new Date().toISOString(),
@@ -3515,109 +3501,6 @@ export async function moveAddonImportedItem(
 
     if (updateError) throw updateError;
   }
-
-  await cleanupMovedSourceContent(sourceRef);
-  return { moved: true, targetType, targetId, title };
-}
-
-  const { data: addon } = await supabase.from('addons').select('id,name,description,catalogs').eq('id', sourceRef.addon_id).maybeSingle();
-  const stremio = await import('./stremio').catch(() => null);
-  const snapshot = await fetchContentSnapshotForMove(sourceRef.content_type as 'movie' | 'series' | 'channel', sourceRef.content_id).catch(() => null) as any;
-  const identity = buildMoveIdentity(sourceRef, snapshot);
-  const addonSources =
-    sourceRef.content_type === 'channel'
-      ? getSnapshotSources(snapshot)
-      : await fetchPlaybackSourcesForContent(sourceRef.content_type as 'movie' | 'series', sourceRef.content_id, identity).catch(() => []);
-  const fallbackSources = getSnapshotSources(snapshot);
-  const streamSources = rankStreamingSources(uniqueSources([...fallbackSources, ...addonSources]));
-  const title = getSnapshotTitle(snapshot, sourceRef.title);
-  const description = getSnapshotDescription(snapshot, sourceRef.meta_json);
-  const poster = getSnapshotPoster(snapshot, sourceRef.meta_json);
-  const backdrop = getSnapshotBackdrop(snapshot, sourceRef.meta_json);
-  const genres = uniqueTextList([...(snapshot?.genre || []), ...((sourceRef.meta_json?.genres || []) as string[])]);
-  const qualities = uniqueTextList([...(snapshot?.quality || []), ...streamSources.map((source) => source.quality || 'Auto')]);
-  const bestSource = streamSources[0];
-  let targetId = '';
-
-  if (targetType === 'channel') {
-    const category = stremio?.predictChannelCategory
-      ? stremio.predictChannelCategory({
-          addon: (addon as any) || undefined,
-          catalog: { type: sourceRef.external_type, id: sourceRef.external_type, name: sourceRef.external_type },
-          meta: sourceRef.meta_json,
-          streams: streamSources,
-        })
-      : 'entertainment';
-    const created = await upsertChannel({
-      name: title,
-      logo: poster,
-      stream_url: bestSource?.url || snapshot?.stream_url || '',
-      stream_sources: streamSources,
-      current_program: description || 'Now Streaming',
-      category,
-      is_live: true,
-      is_featured: false,
-    } as any);
-    targetId = created.id;
-  } else if (targetType === 'movie') {
-    const created = await upsertMovie({
-      title,
-      description,
-      poster,
-      backdrop,
-      trailer_url: snapshot?.trailer_url || '',
-      stream_url: bestSource?.url || snapshot?.stream_url || '',
-      stream_sources: streamSources,
-      genre: genres,
-      rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-      year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
-      duration: snapshot?.duration || sourceRef.meta_json?.runtime || '',
-      cast_members: snapshot?.cast_members || [],
-      quality: qualities.length > 0 ? qualities : ['Auto'],
-      subtitle_url: bestSource?.subtitle || snapshot?.subtitle_url || '',
-      is_featured: false,
-      is_trending: false,
-      is_new: Boolean(snapshot?.is_new),
-      is_exclusive: Boolean(snapshot?.is_exclusive),
-      is_published: true,
-      category_id: snapshot?.category_id || null,
-    } as any);
-    targetId = created.id;
-  } else {
-    const created = await upsertSeries({
-      title,
-      description,
-      poster,
-      backdrop,
-      trailer_url: snapshot?.trailer_url || '',
-      genre: genres,
-      rating: Number(snapshot?.rating || sourceRef.meta_json?.imdbRating || 0) || 0,
-      year: snapshot?.year || sourceRef.year || toReleaseYear(sourceRef.meta_json?.releaseInfo) || new Date().getFullYear(),
-      cast_members: snapshot?.cast_members || [],
-      total_seasons: snapshot?.total_seasons || 1,
-      total_episodes: snapshot?.total_episodes || 0,
-      status: snapshot?.status || 'Returning Series',
-      is_featured: false,
-      is_trending: false,
-      is_new: Boolean(snapshot?.is_new),
-      is_exclusive: Boolean(snapshot?.is_exclusive),
-      is_published: true,
-      category_id: snapshot?.category_id || null,
-    } as any);
-    targetId = created.id;
-  }
-
-  const { error: updateError } = await supabase
-    .from('content_external_refs')
-    .update({
-      content_type: targetType,
-      content_id: targetId,
-      title,
-      year: snapshot?.year || sourceRef.year || null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', refId);
-  if (updateError) throw updateError;
 
   await cleanupMovedSourceContent(sourceRef);
   return { moved: true, targetType, targetId, title };
