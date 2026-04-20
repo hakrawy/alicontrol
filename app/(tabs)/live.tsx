@@ -11,13 +11,16 @@ import { config } from '../../constants/config';
 import { useAppContext } from '../../contexts/AppContext';
 import { formatViewers } from '../../services/api';
 import { useLocale } from '../../contexts/LocaleContext';
+import { CinematicBackdrop, CinematicHeader, SkeletonGrid } from '../../components/CinematicUI';
+import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function LiveScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { channels } = useAppContext();
+  const { channels, loading } = useAppContext();
+  const perf = useAdaptivePerformance();
   const { language, isRTL, direction } = useLocale();
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -69,9 +72,10 @@ export default function LiveScreen() {
   const featuredChannels = channels.filter(c => c.is_featured && c.is_live);
 
   return (
-    <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.background, direction }]}>
+    <CinematicBackdrop>
+    <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: 'transparent', direction }]}>
+      <CinematicHeader eyebrow="Live pulse" title={copy.title} subtitle={`${channels.filter(c => c.is_live).length} ${copy.liveCount}`} icon="live-tv" />
       <View style={[styles.header, styles.pageShell, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-        <Text style={styles.headerTitle}>{copy.title}</Text>
         <View style={styles.liveIndicator}>
           <View style={styles.liveRedDot} />
           <Text style={styles.liveCount}>{channels.filter(c => c.is_live).length} {copy.liveCount}</Text>
@@ -100,7 +104,7 @@ export default function LiveScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
               {featuredChannels.map(ch => (
                 <Pressable key={ch.id} style={styles.featuredCard} onPress={() => openChannel(ch)}>
-                  <Image source={{ uri: ch.logo }} style={styles.featuredImage} contentFit="cover" transition={200} />
+                  <Image source={{ uri: ch.logo }} style={styles.featuredImage} contentFit="cover" transition={perf.imageTransition} />
                   <View style={styles.featuredOverlay}>
                     <View style={styles.featuredLiveBadge}><View style={styles.featuredLiveDot} /><Text style={styles.featuredLiveText}>{copy.live}</Text></View>
                     <View style={styles.featuredInfo}>
@@ -126,13 +130,13 @@ export default function LiveScreen() {
           ))}
         </ScrollView>
 
-        <View style={styles.channelGrid}>
+        {loading ? <SkeletonGrid count={8} columns={perf.compact ? 1 : 2} /> : <View style={styles.channelGrid}>
           {filtered.map((ch, index) => (
             <Animated.View key={ch.id} entering={FadeInDown.delay(index * 50).duration(300)}>
               <Pressable style={styles.channelCard} onPress={() => openChannel(ch)}>
                 <View style={styles.channelLogoPanel}>
                   <View style={styles.channelLogoWrap}>
-                    <Image source={{ uri: ch.logo }} style={styles.channelLogo} contentFit="contain" transition={200} />
+                    <Image source={{ uri: ch.logo }} style={styles.channelLogo} contentFit="contain" transition={perf.imageTransition} />
                   </View>
                 </View>
                 <View style={styles.channelInfo}>
@@ -147,7 +151,7 @@ export default function LiveScreen() {
               </Pressable>
             </Animated.View>
           ))}
-        </View>
+        </View>}
 
         {filtered.length === 0 && (
           <View style={styles.emptyState}>
@@ -157,6 +161,7 @@ export default function LiveScreen() {
       )}
       </ScrollView>
     </SafeAreaView>
+    </CinematicBackdrop>
   );
 }
 
@@ -164,7 +169,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   pageShell: { width: '100%', maxWidth: 1180, alignSelf: 'center' },
   header: { justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: '#FFF', letterSpacing: -0.5 },
   liveIndicator: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveRedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.live },
   liveCount: { fontSize: 14, fontWeight: '600', color: theme.live },

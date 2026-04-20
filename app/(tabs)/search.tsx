@@ -13,6 +13,8 @@ import * as api from '../../services/api';
 import { useAppContext } from '../../contexts/AppContext';
 import { useLocale } from '../../contexts/LocaleContext';
 import { buildContentRoute } from '../../services/navigation';
+import { CinematicBackdrop, SkeletonGrid } from '../../components/CinematicUI';
+import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
 
 type SearchFilter = 'all' | 'movie' | 'series' | 'channel';
 
@@ -22,6 +24,7 @@ export default function SearchScreen() {
   const params = useLocalSearchParams<{ q?: string }>();
   const { language, isRTL, direction } = useLocale();
   const { allMovies, allSeries, channels } = useAppContext();
+  const perf = useAdaptivePerformance();
   const [query, setQuery] = useState(typeof params.q === 'string' ? params.q : '');
   const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
@@ -115,7 +118,8 @@ export default function SearchScreen() {
   const subtitle = (item: api.SearchResultItem) => item.type === 'channel' ? String(item.category || copy.live).toUpperCase() : (item.genre?.[0] || copy.featured);
 
   return (
-    <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.background, direction }]}>
+    <CinematicBackdrop>
+    <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: 'transparent', direction }]}>
       <View style={styles.searchBarWrap}>
         <View style={styles.searchBar}>
           <MaterialIcons name="search" size={22} color={theme.textMuted} />
@@ -154,7 +158,9 @@ export default function SearchScreen() {
       </View>
 
       <View style={{ flex: 1, paddingHorizontal: 16 }}>
-        {visibleItems.length > 0 ? (
+        {searching ? (
+          <SkeletonGrid count={8} columns={gridColumns} />
+        ) : visibleItems.length > 0 ? (
           <FlashList
             data={visibleItems}
             numColumns={gridColumns}
@@ -166,7 +172,7 @@ export default function SearchScreen() {
                 <Pressable onPress={() => openItem(item)}>
                   <View style={styles.card}>
                     <View style={styles.posterWrap}>
-                      <Image source={{ uri: posterUri(item) }} style={styles.poster} contentFit={item.type === 'channel' ? 'contain' : 'cover'} transition={180} />
+                      <Image source={{ uri: posterUri(item) }} style={styles.poster} contentFit={item.type === 'channel' ? 'contain' : 'cover'} transition={perf.imageTransition} />
                       {item.type !== 'channel' && (item as any).is_new ? <View style={styles.newBadge}><Text style={styles.newBadgeText}>{copy.new}</Text></View> : null}
                     </View>
                     <View style={styles.cardInfo}>
@@ -191,6 +197,7 @@ export default function SearchScreen() {
         )}
       </View>
     </SafeAreaView>
+    </CinematicBackdrop>
   );
 }
 

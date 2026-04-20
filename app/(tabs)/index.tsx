@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import {
   View, Text, ScrollView, Pressable, Dimensions, StyleSheet, TextInput,
-  NativeSyntheticEvent, NativeScrollEvent, ActivityIndicator, RefreshControl,
+  NativeSyntheticEvent, NativeScrollEvent, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,11 +19,15 @@ import * as api from '../../services/api';
 import { useAuth } from '@/template';
 import { useLocale } from '../../contexts/LocaleContext';
 import { buildContentRoute } from '../../services/navigation';
+import { PremiumLoader } from '../../components/PremiumLoader';
+import { CinematicBackdrop } from '../../components/CinematicUI';
+import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const perf = useAdaptivePerformance();
   const { language, isRTL, direction } = useLocale();
   const {
     banners, trendingMovies, featuredMovies, newContent, allSeries, allMovies,
@@ -164,15 +168,14 @@ export default function HomeScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={theme.primary} />
-        <Text style={{ color: theme.textSecondary, marginTop: 16, fontSize: 14 }}>{copy.loading}</Text>
+      <View style={styles.container}>
+        <PremiumLoader hint={copy.loading} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background, direction }]}>
+    <CinematicBackdrop style={{ direction } as any}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingTop: insets.top + 72, paddingBottom: insets.bottom + 16 }}
@@ -205,7 +208,7 @@ export default function HomeScreen() {
                   if (target) navigateToContent(target);
                   else if (banner.content_id) router.push(`/content/${banner.content_id}`);
                 }} style={{ width: screenWidth, height: HERO_HEIGHT }}>
-                  <Image source={{ uri: banner.backdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
+                  <Image source={{ uri: banner.backdrop }} style={StyleSheet.absoluteFill} contentFit="cover" transition={perf.imageTransition} />
                   <LinearGradient colors={['transparent', 'rgba(10,10,15,0.4)', 'rgba(10,10,15,0.85)', theme.background]} style={StyleSheet.absoluteFill} locations={[0, 0.4, 0.7, 1]} />
                   <View style={[styles.heroContent, { paddingTop: insets.top + 40 }]}>
                     {banner.badge ? <View style={styles.heroBadge}><Text style={styles.heroBadgeText}>{banner.badge}</Text></View> : null}
@@ -254,7 +257,7 @@ export default function HomeScreen() {
                 return (
                     <Pressable key={item.id} onPress={() => navigateToContent(item)} style={styles.continueCard}>
                     <View style={styles.continuePosterWrap}>
-                      <Image source={{ uri: item.poster }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={200} />
+                      <Image source={{ uri: item.poster }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={perf.imageTransition} />
                       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.continueGradient} />
                       <View style={styles.continuePlayIcon}>
                         <MaterialIcons name="play-circle-filled" size={32} color="rgba(255,255,255,0.9)" />
@@ -453,7 +456,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       </View>
-    </View>
+    </CinematicBackdrop>
   );
 }
 
