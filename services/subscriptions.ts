@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSupabaseClient } from '@/template';
 import * as api from './api';
+import { validateSubscriptionCode as validateSubscriptionCodeEdge } from '../src/lib/edgeFunctions';
 
 export type SubscriptionCodeStatus = 'active' | 'disabled' | 'expired';
 
@@ -20,6 +21,7 @@ export interface SubscriptionCode {
 
 export interface SubscriptionSession {
   sessionId: string;
+  subscriptionId: string;
   codeId: string;
   code: string;
   startedAt: string;
@@ -62,6 +64,31 @@ function effectiveStatus(code: SubscriptionCode): SubscriptionCodeStatus {
   if (code.expiresAt && new Date(code.expiresAt).getTime() < Date.now()) return 'expired';
   if (code.maxUses > 0 && code.usedCount >= code.maxUses) return 'expired';
   return 'active';
+}
+
+function readWebStorageSession() {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  return window.localStorage.getItem(SESSION_KEY);
+}
+
+async function readStoredSessionRaw() {
+  const asyncStorageValue = await AsyncStorage.getItem(SESSION_KEY);
+  return asyncStorageValue || readWebStorageSession();
+}
+
+async function persistSession(session: SubscriptionSession) {
+  const payload = JSON.stringify(session);
+  await AsyncStorage.setItem(SESSION_KEY, payload);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.setItem(SESSION_KEY, payload);
+  }
+}
+
+async function removePersistedSession() {
+  await AsyncStorage.removeItem(SESSION_KEY);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.removeItem(SESSION_KEY);
+  }
 }
 
 function fromDbCode(row: any): SubscriptionCode {
@@ -205,8 +232,31 @@ export async function deleteSubscriptionCode(idValue: string) {
 }
 
 export async function validateSubscriptionCode(rawCode: string) {
-  const current = await fetchSubscriptionCodes();
   const normalized = normalizeCode(rawCode);
+  try {
+    const remote = await validateSubscriptionCodeEdge({ code: normalized });
+    if (!remote.valid) {
+      throw new Error(remote.message || 'Subscription code was not found.');
+    }
+    const startedAt = remote.startedAt || new Date().toISOString();
+    const codeExpiry = remote.expiresAt ? new Date(remote.expiresAt) : new Date(Date.now() + (remote.durationDays || 30) * 24 * 60 * 60 * 1000);
+    const hardExpiry = new Date(new Date(startedAt).getTime() + SESSION_MAX_HOURS * 60 * 60 * 1000);
+    const expiresAt = new Date(Math.min(codeExpiry.getTime(), hardExpiry.getTime())).toISOString();
+    const session: SubscriptionSession = {
+      sessionId: remote.sessionId || id('session'),
+      subscriptionId: remote.subscriptionId || remote.codeId || normalized,
+      codeId: remote.codeId || remote.subscriptionId || normalized,
+      code: remote.code || normalized,
+      startedAt,
+      expiresAt,
+    };
+    await persistSession(session);
+    return session;
+  } catch {
+    // Fallback below keeps the app usable if Edge Functions are temporarily unavailable.
+  }
+
+  const current = await fetchSubscriptionCodes();
   const match = current.find((code) => normalizeCode(code.code) === normalized);
   if (!match) throw new Error('Subscription code was not found.');
   const status = effectiveStatus(match);
@@ -216,13 +266,14 @@ export async function validateSubscriptionCode(rawCode: string) {
   const startedAt = new Date();
   const codeExpiry = new Date(startedAt.getTime() + match.durationDays * 24 * 60 * 60 * 1000);
   const hardExpiry = new Date(startedAt.getTime() + SESSION_MAX_HOURS * 60 * 60 * 1000);
-  const expiresAt = new Date(Math.min(codeExpiry.getTime(), hardExpiry.getTime()));
+  const expiresAt = new Date(Math.min(codeExpiry.getTime(), hardExpiry.getTime())).toISOString();
   const session: SubscriptionSession = {
     sessionId: id('session'),
+    subscriptionId: match.id,
     codeId: match.id,
     code: match.code,
     startedAt: startedAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
+    expiresAt,
   };
   try {
     const { error: updateError } = await supabase
@@ -238,9 +289,9 @@ export async function validateSubscriptionCode(rawCode: string) {
       code_id: match.id,
       session_id: session.sessionId,
       used_at: startedAt.toISOString(),
-      expires_at: expiresAt.toISOString(),
+      expires_at: expiresAt,
     });
-    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    await persistSession(session);
     return session;
   } catch {
     // Fallback below.
@@ -250,37 +301,37 @@ export async function validateSubscriptionCode(rawCode: string) {
         ...code,
         usedCount: code.usedCount + 1,
         lastUsedAt: startedAt.toISOString(),
-        usedBy: [{ sessionId: session.sessionId, usedAt: startedAt.toISOString(), expiresAt: expiresAt.toISOString() }, ...(code.usedBy || [])].slice(0, 100),
+        usedBy: [{ sessionId: session.sessionId, usedAt: startedAt.toISOString(), expiresAt }, ...(code.usedBy || [])].slice(0, 100),
       }
     : code
   );
   await saveCodes(nextCodes).catch(() => null);
-  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  await persistSession(session);
   return session;
 }
 
 export async function getSubscriptionSession() {
-  const raw = await AsyncStorage.getItem(SESSION_KEY);
+  const raw = await readStoredSessionRaw();
   if (!raw) return null;
   try {
     const session = JSON.parse(raw) as SubscriptionSession;
     if (new Date(session.expiresAt).getTime() < Date.now()) {
-      await AsyncStorage.removeItem(SESSION_KEY);
+      await removePersistedSession();
       return null;
     }
     const codes = await fetchSubscriptionCodes();
     const match = codes.find((code) => normalizeCode(code.code) === normalizeCode(session.code));
     if (!match || effectiveStatus(match) !== 'active') {
-      await AsyncStorage.removeItem(SESSION_KEY);
+      await removePersistedSession();
       return null;
     }
     return session;
   } catch {
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await removePersistedSession();
     return null;
   }
 }
 
 export async function clearSubscriptionSession() {
-  await AsyncStorage.removeItem(SESSION_KEY);
+  await removePersistedSession();
 }
