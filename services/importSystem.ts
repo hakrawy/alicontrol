@@ -16,12 +16,21 @@ export interface ImportSystemPreview extends ExternalImportPreview {
 }
 
 function cleanHost(host: string) {
-  return String(host || '').trim().replace(/\/+$/, '');
+  let value = String(host || '').trim();
+  if (!value) return '';
+  if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`.replace(/\/+$/, '');
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
 }
 
 function parseFullM3UUrl(fullUrl: string): XtreamCredentials | null {
   try {
-    const parsed = new URL(fullUrl);
+    const value = /^https?:\/\//i.test(fullUrl.trim()) ? fullUrl.trim() : `http://${fullUrl.trim()}`;
+    const parsed = new URL(value);
     const username = parsed.searchParams.get('username') || '';
     const password = parsed.searchParams.get('password') || '';
     if (!username || !password) return null;
@@ -29,7 +38,7 @@ function parseFullM3UUrl(fullUrl: string): XtreamCredentials | null {
       host: `${parsed.protocol}//${parsed.host}`,
       username,
       password,
-      fullUrl,
+      fullUrl: value,
     };
   } catch {
     return null;
@@ -261,6 +270,25 @@ export async function readXtreamPreview(credentialsInput: XtreamCredentials, opt
     options?.includeSeriesInfo ? options.maxSeriesInfoRequests ?? 25 : 0
   );
   const items = [...live, ...vod, ...series];
+
+  if (!items.length) {
+    try {
+      const fallbackUrl = buildM3UUrl(credentials);
+      const playlistPreview = await readM3UImportPreview(fallbackUrl);
+      return {
+        ...playlistPreview,
+        requestedUrl: credentials.fullUrl || credentials.host,
+        resolvedUrl: fallbackUrl.replace(/password=[^&]+/i, 'password=***'),
+        warnings: endpointStatus.filter((endpoint) => !endpoint.ok).map((endpoint) => `${endpoint.name}: ${endpoint.message}`),
+        endpointStatus: [
+          ...endpointStatus,
+          { name: 'M3U fallback', ok: playlistPreview.items.length > 0, message: `${playlistPreview.items.length} items` },
+        ],
+      } as ImportSystemPreview;
+    } catch {
+      // Keep the structured API warnings if the M3U endpoint is also unavailable.
+    }
+  }
 
   return {
     provider: 'custom',
