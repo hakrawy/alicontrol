@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth, useAlert } from '@/template';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
@@ -45,6 +45,10 @@ export default function WatchRoomScreen() {
   const [roomName, setRoomName] = useState('');
   const chatScrollRef = useRef<ScrollView>(null);
   const roomId = selectedRoom?.id;
+
+  if (!user) {
+    return <Redirect href="/login" />;
+  }
 
   const copy = language === 'Arabic'
     ? {
