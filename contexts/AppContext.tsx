@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
 import type { ContentItem, Favorite, WatchHistory, Banner, Channel, WatchRoom } from '../services/api';
@@ -34,6 +35,8 @@ interface AppState {
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
+const HOME_CACHE_KEY = 'cinematic-home-cache-v2';
+const HOME_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -82,6 +85,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadHomeData = useCallback(async () => {
     try {
       setLoading(true);
+      const cachedRaw = await AsyncStorage.getItem(HOME_CACHE_KEY).catch(() => null);
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw);
+          if (cached?.storedAt && Date.now() - cached.storedAt < HOME_CACHE_MAX_AGE_MS) {
+            setBanners(cached.banners || []);
+            applyViewerCounts(cached.movies || [], cached.series || [], cached.channelsData || [], null);
+            setActiveRooms(cached.rooms || []);
+            setDynamicSections(cached.dynamicSections || []);
+            setLoading(false);
+          }
+        } catch {
+          // Ignore malformed cache and continue with network refresh.
+        }
+      }
       const [bannersData, movies, series, channelsData, rooms, viewerCounts] = await Promise.all([
         api.fetchBanners(),
         api.fetchMovies(),
@@ -94,13 +112,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setBanners(bannersData);
       applyViewerCounts(movies, series, channelsData, viewerCounts);
       setActiveRooms(rooms);
-      setDynamicSections(await api.fetchDynamicHomeSections(user?.id).catch(() => []));
+      const nextDynamicSections = await api.fetchDynamicHomeSections(user?.id).catch(() => []);
+      setDynamicSections(nextDynamicSections);
+      await AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+        storedAt: Date.now(),
+        banners: bannersData,
+        movies,
+        series,
+        channelsData,
+        rooms,
+        dynamicSections: nextDynamicSections,
+      })).catch(() => null);
     } catch (err) {
       console.error('Failed to load home data:', err);
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [applyViewerCounts, user?.id]);
 
   const loadUserData = useCallback(async () => {
     if (!user?.id) {
