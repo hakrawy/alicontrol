@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -39,6 +39,10 @@ export default function AdminAddons() {
     empty: ar ? 'لا توجد إضافات محفوظة.' : 'No saved add-ons.',
     saveSettings: ar ? 'حفظ الإعدادات' : 'Save Settings',
     cancel: ar ? 'إلغاء' : 'Cancel',
+    delete: ar ? 'حذف' : 'Delete',
+    deleteTitle: ar ? 'حذف الإضافة؟' : 'Delete add-on?',
+    deleteDesc: ar ? 'سيتم حذف الإضافة من لوحة التحكم. المحتوى المستورد سابقًا سيبقى محفوظًا لتجنب فقدان بياناتك.' : 'This removes the add-on from admin. Previously imported content is kept to avoid data loss.',
+    deleteDone: ar ? 'تم الحذف' : 'Deleted',
   };
   const [addons, setAddons] = useState<api.AddonRecord[]>([]);
   const [manifestUrl, setManifestUrl] = useState('');
@@ -123,6 +127,32 @@ export default function AdminAddons() {
     } finally { setWorking(''); }
   };
 
+  const confirmDeleteAddon = (addon: api.AddonRecord) => {
+    Alert.alert(
+      t.deleteTitle,
+      `${addon.name}\n\n${t.deleteDesc}`,
+      [
+        { text: t.cancel, style: 'cancel' },
+        {
+          text: t.delete,
+          style: 'destructive',
+          onPress: async () => {
+            setWorking(`delete:${addon.id}`);
+            try {
+              await api.deleteAddon(addon.id);
+              setAddons((current) => current.filter((item) => item.id !== addon.id));
+              showAlert(t.deleteDone, addon.name);
+            } catch (e: any) {
+              showAlert('Delete failed', e?.message || 'Could not delete this add-on.');
+            } finally {
+              setWorking('');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color={theme.primary} /></View>;
 
   return (
@@ -171,6 +201,7 @@ export default function AdminAddons() {
                 {kind !== 'stream' ? <Icon icon="cloud-download" color={theme.success} onPress={() => void api.importAddonContent(addon.id).then((r) => showAlert(t.import, `${r.addonName}\nMovies ${r.importedMovies}\nSeries ${r.importedSeries}\nChannels ${r.importedChannels}`)).then(load)} /> : null}
                 <Icon icon="tune" color={theme.accent} onPress={() => { setSettingsAddon(addon); setConfigDraft(addon.config_values || {}); setRawConfigJson(JSON.stringify(addon.config_values || {}, null, 2)); }} />
                 <Icon icon="science" color={theme.info} onPress={() => void api.testAddonManifest(addon.manifest_url).then((r) => showAlert(ar ? 'نتيجة الاختبار' : 'Test Result', r.sampleResult)).catch((e: any) => showAlert('Test failed', e?.message || 'Could not test addon.'))} />
+                <Icon icon={working === `delete:${addon.id}` ? 'hourglass-empty' : 'delete'} color={theme.error} onPress={() => confirmDeleteAddon(addon)} />
               </View>
             </View>
           );
