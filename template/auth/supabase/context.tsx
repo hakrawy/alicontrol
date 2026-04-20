@@ -98,6 +98,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const mountedRef = useRef(true);
   const bootstrapRef = useRef<Promise<void> | null>(null);
   const authSwitchRef = useRef<'subscription' | null>(null);
+  const bootstrapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bootstrapDoneRef = useRef(false);
 
   const updateState = useCallback((updates: Partial<AuthContextState>) => {
     setState((prevState) => ({ ...prevState, ...updates }));
@@ -131,6 +133,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             loading: false,
             initialized: true,
           });
+          bootstrapDoneRef.current = true;
           return;
         }
 
@@ -144,6 +147,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             loading: false,
             initialized: true,
           });
+          bootstrapDoneRef.current = true;
           return;
         }
 
@@ -156,6 +160,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           loading: false,
           initialized: true,
         });
+        bootstrapDoneRef.current = true;
       } catch (error) {
         console.warn('[Template:AuthProvider] Auth bootstrap failed:', error);
         if (!mountedRef.current) return;
@@ -168,12 +173,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
           loading: false,
           initialized: true,
         });
+        bootstrapDoneRef.current = true;
       }
     })().finally(() => {
       bootstrapRef.current = null;
+      if (bootstrapTimeoutRef.current) {
+        clearTimeout(bootstrapTimeoutRef.current);
+        bootstrapTimeoutRef.current = null;
+      }
     });
 
     bootstrapRef.current = bootstrapPromise;
+    bootstrapTimeoutRef.current = setTimeout(() => {
+      if (!mountedRef.current || bootstrapDoneRef.current) return;
+      updateState({
+        currentUser: null,
+        user: null,
+        isAuthenticated: false,
+        authMethod: null,
+        authLoading: false,
+        loading: false,
+        initialized: true,
+      });
+      bootstrapRef.current = null;
+      bootstrapDoneRef.current = true;
+    }, 2200);
     return bootstrapPromise;
   }, [updateState]);
 
@@ -329,7 +353,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       mountedRef.current = false;
       bootstrapRef.current = null;
+      if (bootstrapTimeoutRef.current) {
+        clearTimeout(bootstrapTimeoutRef.current);
+        bootstrapTimeoutRef.current = null;
+      }
       authSwitchRef.current = null;
+      bootstrapDoneRef.current = false;
       if (subscription?.unsubscribe) {
         subscription.unsubscribe();
       }
