@@ -13,14 +13,13 @@ import { getPreferences } from '../../services/preferences';
 import { useLocale } from '../../contexts/LocaleContext';
 import { localizePreferenceValue } from '../../constants/i18n';
 import { CinematicBackdrop } from '../../components/CinematicUI';
-import * as subscriptions from '../../services/subscriptions';
 
 interface SettingsItem { id: string; icon: string; label: string; subtitle?: string; color?: string; chevron?: boolean; slug?: string }
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { currentUser, authMethod, logout } = useAuth();
   const { t, language, isRTL } = useLocale();
   const { showAlert } = useAlert();
   const { favorites, watchHistory, isAdmin, refreshHome } = useAppContext();
@@ -29,8 +28,17 @@ export default function ProfileScreen() {
   const [profileMeta, setProfileMeta] = useState({ username: '', display_name: '', avatar: '' });
 
   const loadProfileMeta = useCallback(async () => {
-    if (!user?.id) {
+    if (!currentUser?.id) {
       setProfileMeta({ username: '', display_name: '', avatar: '' });
+      return;
+    }
+
+    if (authMethod === 'subscription') {
+      setProfileMeta({
+        username: currentUser.username || 'subscription',
+        display_name: currentUser.username || 'Subscription Access',
+        avatar: '',
+      });
       return;
     }
 
@@ -39,22 +47,22 @@ export default function ProfileScreen() {
       const { data } = await supabase
         .from('user_profiles')
         .select('username, display_name, avatar')
-        .eq('id', user.id)
+        .eq('id', currentUser.id)
         .maybeSingle();
 
       setProfileMeta({
-        username: data?.username || user.username || '',
+        username: data?.username || currentUser.username || '',
         display_name: data?.display_name || '',
         avatar: data?.avatar || '',
       });
     } catch {
       setProfileMeta({
-        username: user.username || '',
+        username: currentUser.username || '',
         display_name: '',
         avatar: '',
       });
     }
-  }, [user?.id, user?.username]);
+  }, [authMethod, currentUser?.id, currentUser?.username]);
 
   const loadPreferenceMeta = useCallback(async () => {
     const preferences = await getPreferences();
@@ -107,15 +115,19 @@ export default function ProfileScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: async () => {
         const { error } = await logout().catch((err: any) => ({ error: err?.message || 'Logout failed' }));
-        await subscriptions.clearSubscriptionSession().catch(() => null);
         router.replace('/login');
         if (error) showAlert('Error', error);
       }},
     ]);
   };
 
-  const displayName = profileMeta.display_name || profileMeta.username || user?.username || user?.email?.split('@')[0] || 'User';
-  const avatarLetter = (displayName?.[0] || user?.email?.[0] || 'U').toUpperCase();
+  const displayName = profileMeta.display_name || profileMeta.username || currentUser?.username || currentUser?.email?.split('@')[0] || 'User';
+  const avatarLetter = (displayName?.[0] || currentUser?.email?.[0] || 'U').toUpperCase();
+  const authMethodLabel = authMethod === 'subscription'
+    ? (language === 'Arabic' ? 'مفتاح اشتراك' : 'Subscription Access')
+    : authMethod === 'email'
+      ? (language === 'Arabic' ? 'البريد الإلكتروني' : 'Email Login')
+      : '';
 
   return (
     <CinematicBackdrop>
@@ -135,7 +147,8 @@ export default function ProfileScreen() {
             ) : null}
           </View>
           <Text style={styles.userName}>{displayName}</Text>
-          <Text style={styles.userEmail}>{user?.email || ''}</Text>
+          <Text style={styles.userEmail}>{currentUser?.email || ''}</Text>
+          {authMethodLabel ? <Text style={styles.authMethodText}>{authMethodLabel}</Text> : null}
           {isAdmin ? (
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
               <Pressable style={[styles.adminBtn, { marginTop: 0 }]} onPress={() => router.push('/admin')}>
@@ -219,6 +232,7 @@ const styles = StyleSheet.create({
   premiumBadge: { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: theme.background },
   userName: { fontSize: 22, fontWeight: '700', color: '#FFF' },
   userEmail: { fontSize: 14, color: theme.textSecondary, marginTop: 2 },
+  authMethodText: { fontSize: 12, color: '#8ED8FF', marginTop: 6, fontWeight: '700' },
   adminBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, backgroundColor: theme.primary, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999 },
   adminBtnText: { fontSize: 14, fontWeight: '600', color: '#FFF' },
   statsRow: {
