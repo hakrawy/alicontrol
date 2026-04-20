@@ -15,6 +15,7 @@ function AppShell() {
   const pathname = usePathname();
   const [booting, setBooting] = useState(true);
   const [accessReady, setAccessReady] = useState(false);
+  const [checkingAccess, setCheckingAccess] = useState(true);
   const [subscriptionSession, setSubscriptionSession] = useState<string | null>(null);
 
   useEffect(() => {
@@ -25,12 +26,14 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false;
     const verifyAccess = async () => {
+      setCheckingAccess(true);
       try {
         const session = await subscriptions.getSubscriptionSession();
         if (cancelled) return;
         setSubscriptionSession(session ? session.sessionId : null);
       } finally {
         if (!cancelled) setAccessReady(true);
+        if (!cancelled) setCheckingAccess(false);
       }
     };
 
@@ -46,7 +49,7 @@ function AppShell() {
   }, [pathname]);
 
   useEffect(() => {
-    if (!accessReady) return;
+    if (!accessReady || checkingAccess) return;
     const onLoginRoute = pathname === '/login';
 
     if (!subscriptionSession && !onLoginRoute) {
@@ -57,7 +60,7 @@ function AppShell() {
     if (subscriptionSession && onLoginRoute) {
       router.replace('/(tabs)');
     }
-  }, [accessReady, pathname, router, subscriptionSession]);
+  }, [accessReady, checkingAccess, pathname, router, subscriptionSession]);
 
   return (
     <View style={{ flex: 1, direction }}>
@@ -141,7 +144,7 @@ function AppShell() {
         <Stack.Screen name="settings/[slug]" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="admin" />
       </Stack>
-      {booting || !accessReady ? <PremiumLoader /> : null}
+      {booting || !accessReady || checkingAccess ? <PremiumLoader /> : null}
     </View>
   );
 }
