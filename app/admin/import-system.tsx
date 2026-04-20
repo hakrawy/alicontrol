@@ -79,6 +79,16 @@ export default function ImportSystemAdmin() {
     }
   };
 
+  const setSelectedByType = (target: ExternalContentType | 'all', selected: boolean) => {
+    setPreview((current) => current
+      ? {
+          ...current,
+          items: current.items.map((item) => target === 'all' || item.type === target ? { ...item, selected } : item),
+        }
+      : current
+    );
+  };
+
   return (
     <ScrollView style={[styles.container, { direction }]} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 28 }} showsVerticalScrollIndicator={false}>
       <LinearGradient colors={['rgba(34,211,238,0.18)', 'rgba(99,102,241,0.08)', 'rgba(10,10,15,0)']} style={styles.hero}>
@@ -143,6 +153,12 @@ export default function ImportSystemAdmin() {
               <Text style={[styles.chipText, filter === item && styles.chipTextActive]}>{item}</Text>
             </Pressable>
           ))}
+          <Pressable style={styles.quickSelect} onPress={() => setSelectedByType(filter === 'all' ? 'all' : filter, true)}>
+            <Text style={styles.quickSelectText}>Select visible</Text>
+          </Pressable>
+          <Pressable style={styles.quickSelect} onPress={() => setSelectedByType(filter === 'all' ? 'all' : filter, false)}>
+            <Text style={styles.quickSelectText}>Clear visible</Text>
+          </Pressable>
         </View>
       ) : null}
 
@@ -204,6 +220,8 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: theme.primary, borderColor: theme.primary },
   chipText: { color: theme.textMuted, fontWeight: '900', textTransform: 'capitalize' },
   chipTextActive: { color: '#FFF' },
+  quickSelect: { borderRadius: 999, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8 },
+  quickSelectText: { color: theme.textSecondary, fontSize: 12, fontWeight: '900' },
   empty: { minHeight: 140, borderRadius: 20, borderWidth: 1, borderStyle: 'dashed', borderColor: theme.borderLight, alignItems: 'center', justifyContent: 'center', padding: 20, marginTop: 12 },
   item: { flexDirection: 'row', gap: 10, alignItems: 'center', borderRadius: 18, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface, padding: 10, marginBottom: 9 },
   check: { width: 28, height: 28, borderRadius: 9, borderWidth: 1, borderColor: theme.borderLight, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.backgroundSecondary },
