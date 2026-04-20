@@ -52,7 +52,8 @@ function parseCodes(raw: string | undefined) {
 }
 
 function normalizeCode(value: string) {
-  return String(value || '').trim().toUpperCase().replace(/\s+/g, '').replace(/(.{4})(?=.)/g, '$1-');
+  const compact = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return compact.replace(/(.{4})(?=.)/g, '$1-');
 }
 
 function effectiveStatus(code: SubscriptionCode): SubscriptionCodeStatus {
@@ -93,14 +94,33 @@ async function fetchDbCodes() {
   return (data || []).map(fromDbCode).map((code) => ({ ...code, status: effectiveStatus(code) }));
 }
 
+async function fetchSettingsCodes() {
+  const settings = await api.fetchAppSettings().catch(() => ({} as Record<string, string>));
+  return parseCodes(settings[CODES_SETTING_KEY]).map((code) => ({ ...code, status: effectiveStatus(code) }));
+}
+
+function mergeCodes(primary: SubscriptionCode[], fallback: SubscriptionCode[]) {
+  const seen = new Set<string>();
+  return [...primary, ...fallback].filter((code) => {
+    const key = normalizeCode(code.code);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function fetchSubscriptionCodes() {
+  const fallbackCodes = await fetchSettingsCodes();
   try {
-    return await fetchDbCodes();
+    const merged = mergeCodes(await fetchDbCodes(), fallbackCodes);
+    if (merged.length > fallbackCodes.length) {
+      await saveCodes(merged).catch(() => null);
+    }
+    return merged;
   } catch {
     // Fallback keeps the project usable before the production migration is applied.
   }
-  const settings = await api.fetchAppSettings().catch(() => ({} as Record<string, string>));
-  return parseCodes(settings[CODES_SETTING_KEY]).map((code) => ({ ...code, status: effectiveStatus(code) }));
+  return fallbackCodes;
 }
 
 async function saveCodes(codes: SubscriptionCode[]) {
@@ -125,7 +145,10 @@ export async function createSubscriptionCode(input: { label?: string; durationDa
       .select()
       .single();
     if (error) throw error;
-    return fromDbCode(data);
+    const created = fromDbCode(data);
+    const fallbackCodes = await fetchSettingsCodes();
+    await saveCodes(mergeCodes([created], fallbackCodes)).catch(() => null);
+    return created;
   } catch {
     // Use settings fallback when the table is not installed.
   }
