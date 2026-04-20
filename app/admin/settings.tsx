@@ -8,6 +8,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
 import { useLocale } from '../../contexts/LocaleContext';
+import { AdminPageShell } from '../../components/AdminPageShell';
 
 const defaultSettings: {
   key: string;
@@ -257,9 +258,11 @@ export default function AdminSettings() {
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={theme.primary} />
-      </View>
+      <AdminPageShell title="App Settings" subtitle="Loading system controls" icon="settings">
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={theme.primary} />
+        </View>
+      </AdminPageShell>
     );
   }
 
@@ -358,14 +361,15 @@ export default function AdminSettings() {
   );
 
   return (
-    <ScrollView
-      style={[styles.container, { direction }]}
-      contentContainerStyle={[
-        { padding: 16, paddingBottom: insets.bottom + 32 },
-        isWide && { maxWidth: 680, alignSelf: 'center', width: '100%', paddingHorizontal: 24 },
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
+    <AdminPageShell title="App Settings" subtitle="Control features, integrations, TMDB, and platform behavior" icon="settings">
+      <ScrollView
+        style={[styles.container, { direction }]}
+        contentContainerStyle={[
+          { padding: 16, paddingBottom: insets.bottom + 32 },
+          isWide && { maxWidth: 680, alignSelf: 'center', width: '100%', paddingHorizontal: 24 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
       {/* General */}
       <Text style={styles.sectionTitle}>{copy.general}</Text>
       {generalSettings.map((s, i) => renderTextSetting(s, i))}
@@ -417,12 +421,14 @@ export default function AdminSettings() {
           <Text style={styles.infoValue}>{Object.keys(settings).length}</Text>
         </View>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </AdminPageShell>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: {
     fontSize: 11,
     fontWeight: '700',
