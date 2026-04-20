@@ -53,6 +53,8 @@ export default function AdminLayout() {
         addons: 'Stremio Addons',
         sources: 'مصادر التشغيل',
         externalImports: 'الاستيراد الخارجي',
+        importSystem: 'Import System',
+        subscriptions: 'أكواد الاشتراك',
       }
     : {
         dashboard: 'Admin Dashboard',
@@ -67,6 +69,8 @@ export default function AdminLayout() {
         addons: 'Stremio Addons',
         sources: 'Playback Sources',
         externalImports: 'External Imports',
+        importSystem: 'Import System',
+        subscriptions: 'Subscriptions',
       };
 
   if (authLoading || !initialized || userDataLoading) {
@@ -106,7 +110,9 @@ export default function AdminLayout() {
       <Stack.Screen name="settings" options={{ title: copy.settings,  ...homeBtn }} />
       <Stack.Screen name="addons"   options={{ title: copy.addons,    ...homeBtn }} />
       <Stack.Screen name="sources"  options={{ title: copy.sources,   ...homeBtn }} />
+      <Stack.Screen name="import-system" options={{ title: copy.importSystem, ...homeBtn }} />
       <Stack.Screen name="external-imports" options={{ title: copy.externalImports, ...homeBtn }} />
+      <Stack.Screen name="subscriptions" options={{ title: copy.subscriptions, ...homeBtn }} />
       <Stack.Screen name="routing"  options={{ title: language === 'Arabic' ? 'توجيه المحتوى' : 'Content Routing', ...homeBtn }} />
     </Stack>
   );
