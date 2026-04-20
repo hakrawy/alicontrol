@@ -9,8 +9,9 @@ import { useAuth, useAlert } from '@/template';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../constants/theme';
 import { useLocale } from '../contexts/LocaleContext';
+import * as subscriptions from '../services/subscriptions';
 
-type AuthMode = 'login' | 'register' | 'otp';
+type AuthMode = 'login' | 'register' | 'otp' | 'subscription';
 
 const getEmailRedirectUrl = () => {
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
@@ -32,6 +33,8 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [otp, setOtp] = useState('');
+  const [subscriptionCode, setSubscriptionCode] = useState('');
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const copy = language === 'Arabic'
@@ -53,6 +56,11 @@ export default function LoginScreen() {
         password: 'كلمة المرور',
         confirmPassword: 'تأكيد كلمة المرور',
         verificationCode: 'رمز التحقق',
+        subscriptionLogin: 'الدخول بمفتاح الاشتراك',
+        subscriptionDesc: 'أدخل كود الاشتراك للدخول مباشرة بدون بريد أو كلمة مرور',
+        subscriptionCode: 'كود الاشتراك',
+        subscriptionSignIn: 'دخول بالكود',
+        subscriptionFailed: 'فشل كود الاشتراك',
         pleaseWait: 'يرجى الانتظار...',
         signIn: 'تسجيل الدخول',
         create: 'إنشاء حساب',
@@ -91,6 +99,11 @@ export default function LoginScreen() {
         password: 'Password',
         confirmPassword: 'Confirm Password',
         verificationCode: 'Verification code',
+        subscriptionLogin: 'Sign in with subscription key',
+        subscriptionDesc: 'Enter your subscription code to access without email or password',
+        subscriptionCode: 'Subscription code',
+        subscriptionSignIn: 'Enter with code',
+        subscriptionFailed: 'Subscription Login Failed',
         pleaseWait: 'Please wait...',
         signIn: 'Sign In',
         create: 'Create Account',
@@ -174,6 +187,22 @@ export default function LoginScreen() {
     }
     if (authUser) {
       router.replace('/(tabs)');
+    }
+  };
+
+  const handleSubscriptionLogin = async () => {
+    if (!subscriptionCode.trim()) {
+      showAlert(copy.error, copy.subscriptionCode);
+      return;
+    }
+    setSubscriptionLoading(true);
+    try {
+      await subscriptions.validateSubscriptionCode(subscriptionCode.trim());
+      router.replace('/(tabs)');
+    } catch (error: any) {
+      showAlert(copy.subscriptionFailed, error?.message || 'Invalid subscription code.');
+    } finally {
+      setSubscriptionLoading(false);
     }
   };
 
@@ -265,13 +294,27 @@ export default function LoginScreen() {
             {/* Form */}
             <Animated.View entering={FadeInDown.delay(200).duration(500)} style={styles.formCard}>
               <Text style={styles.formTitle}>
-                {mode === 'login' ? copy.welcomeBack : mode === 'register' ? copy.createAccount : copy.enterCode}
+                {mode === 'login' ? copy.welcomeBack : mode === 'register' ? copy.createAccount : mode === 'subscription' ? copy.subscriptionLogin : copy.enterCode}
               </Text>
               <Text style={styles.formSubtitle}>
-                {mode === 'login' ? copy.signInDesc : mode === 'register' ? copy.registerDesc : copy.sentCode.replace('{email}', email)}
+                {mode === 'login' ? copy.signInDesc : mode === 'register' ? copy.registerDesc : mode === 'subscription' ? copy.subscriptionDesc : copy.sentCode.replace('{email}', email)}
               </Text>
 
-              {mode !== 'otp' ? (
+              {mode === 'subscription' ? (
+                <View style={styles.inputWrap}>
+                  <MaterialIcons name="vpn-key" size={20} color={theme.textMuted} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder={copy.subscriptionCode}
+                    placeholderTextColor={theme.textMuted}
+                    value={subscriptionCode}
+                    onChangeText={setSubscriptionCode}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    textAlign={isRTL ? 'right' : 'left'}
+                  />
+                </View>
+              ) : mode !== 'otp' ? (
                 <>
                   <View style={styles.inputWrap}>
                     <MaterialIcons name="email" size={20} color={theme.textMuted} />
@@ -334,12 +377,12 @@ export default function LoginScreen() {
               )}
 
               <Pressable
-                style={[styles.primaryBtn, operationLoading && styles.btnDisabled]}
-                onPress={mode === 'login' ? handleLogin : mode === 'register' ? handleSendOTP : handleVerifyOTP}
-                disabled={operationLoading}
+                style={[styles.primaryBtn, (operationLoading || subscriptionLoading) && styles.btnDisabled]}
+                onPress={mode === 'login' ? handleLogin : mode === 'register' ? handleSendOTP : mode === 'subscription' ? handleSubscriptionLogin : handleVerifyOTP}
+                disabled={operationLoading || subscriptionLoading}
               >
                 <Text style={styles.primaryBtnText}>
-                  {operationLoading ? copy.pleaseWait : mode === 'login' ? copy.signIn : mode === 'register' ? copy.create : copy.verify}
+                  {operationLoading || subscriptionLoading ? copy.pleaseWait : mode === 'login' ? copy.signIn : mode === 'register' ? copy.create : mode === 'subscription' ? copy.subscriptionSignIn : copy.verify}
                 </Text>
               </Pressable>
 
@@ -347,13 +390,23 @@ export default function LoginScreen() {
                 <Pressable onPress={() => setMode('register')} style={styles.switchBtn}>
                   <Text style={styles.switchText}>{copy.goBack}</Text>
                 </Pressable>
-              ) : (
-                <Pressable onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setOtp(''); }} style={styles.switchBtn}>
-                  <Text style={styles.switchText}>
-                    {mode === 'login' ? copy.noAccount : copy.alreadyAccount}
-                    <Text style={styles.switchHighlight}>{mode === 'login' ? copy.signUp : copy.signIn}</Text>
-                  </Text>
+              ) : mode === 'subscription' ? (
+                <Pressable onPress={() => setMode('login')} style={styles.switchBtn}>
+                  <Text style={styles.switchText}>{copy.goBack}</Text>
                 </Pressable>
+              ) : (
+                <>
+                  <Pressable onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setOtp(''); }} style={styles.switchBtn}>
+                    <Text style={styles.switchText}>
+                      {mode === 'login' ? copy.noAccount : copy.alreadyAccount}
+                      <Text style={styles.switchHighlight}>{mode === 'login' ? copy.signUp : copy.signIn}</Text>
+                    </Text>
+                  </Pressable>
+                  <Pressable onPress={() => setMode('subscription')} style={styles.subscriptionBtn}>
+                    <MaterialIcons name="vpn-key" size={16} color="#A7F3D0" />
+                    <Text style={styles.subscriptionBtnText}>{copy.subscriptionLogin}</Text>
+                  </Pressable>
+                </>
               )}
             </Animated.View>
           </ScrollView>
@@ -551,4 +604,17 @@ const styles = StyleSheet.create({
   switchBtn: { alignItems: 'center', marginTop: 20 },
   switchText: { fontSize: 14, color: theme.textSecondary },
   switchHighlight: { color: theme.primary, fontWeight: '600' },
+  subscriptionBtn: {
+    marginTop: 14,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(167,243,208,0.22)',
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  subscriptionBtnText: { color: '#D1FAE5', fontSize: 13, fontWeight: '800' },
 });
