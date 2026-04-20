@@ -107,12 +107,12 @@ export default function ImportSystemAdmin() {
       <View style={styles.card}>
         {mode === 'xtream' ? (
           <>
-            <TextInput style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]} value={host} onChangeText={setHost} placeholder="http://xxxxxx:2052" placeholderTextColor={theme.textMuted} autoCapitalize="none" />
+            <TextInput style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]} value={host} onChangeText={setHost} placeholder="http://host-or-domain" placeholderTextColor={theme.textMuted} autoCapitalize="none" />
             <View style={styles.twoCols}>
               <TextInput style={[styles.input, styles.flexInput]} value={username} onChangeText={setUsername} placeholder={copy.username} placeholderTextColor={theme.textMuted} autoCapitalize="none" />
               <TextInput style={[styles.input, styles.flexInput]} value={password} onChangeText={setPassword} placeholder={copy.password} placeholderTextColor={theme.textMuted} autoCapitalize="none" secureTextEntry />
             </View>
-            <TextInput style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]} value={fullUrl} onChangeText={setFullUrl} placeholder="http://host:2052/get.php?username=...&password=...&type=m3u_plus" placeholderTextColor={theme.textMuted} autoCapitalize="none" />
+            <TextInput style={[styles.input, { textAlign: isRTL ? 'right' : 'left' }]} value={fullUrl} onChangeText={setFullUrl} placeholder="http://host-or-domain/get.php?username=...&password=...&type=m3u_plus" placeholderTextColor={theme.textMuted} autoCapitalize="none" />
             <View style={styles.switchRow}>
               <Text style={styles.switchText}>{copy.includeSeriesInfo}</Text>
               <Switch value={includeSeriesInfo} onValueChange={setIncludeSeriesInfo} />
