@@ -6,7 +6,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AlertProvider, AuthProvider, useAuth } from '@/template';
 import { AppProvider } from '../contexts/AppContext';
 import { LocaleProvider, useLocale } from '../contexts/LocaleContext';
-import { PremiumLoader } from '../components/PremiumLoader';
 
 function RouteGate() {
   const router = useRouter();
@@ -34,10 +33,6 @@ function RouteGate() {
       router.replace('/(tabs)');
     }
   }, [isAuthenticated, isLoginRoute, isReady, router]);
-
-  if (!isReady) {
-    return <PremiumLoader />;
-  }
 
   return null;
 }
