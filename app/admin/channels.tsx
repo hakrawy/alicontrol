@@ -10,6 +10,7 @@ import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
 import type { Channel } from '../../services/api';
 import { useLocale } from '../../contexts/LocaleContext';
+import { AdminPageShell } from '../../components/AdminPageShell';
 
 const emptyForm = {
   name: '', logo: '', stream_url: '', category: '', current_program: '',
@@ -182,7 +183,7 @@ export default function AdminChannels() {
     }
   };
 
-  if (loading) return <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color={theme.primary} /></View>;
+  if (loading) return <AdminPageShell title="Channels" subtitle="Loading live catalog controls" icon="live-tv"><View style={styles.center}><ActivityIndicator size="large" color={theme.primary} /></View></AdminPageShell>;
 
   const textFields = [
     { key: 'name', label: 'CHANNEL NAME' },
@@ -200,6 +201,7 @@ export default function AdminChannels() {
   ];
 
   return (
+    <AdminPageShell title="Channels" subtitle="Manage live streams, playlists, bulk deletion, and categories" icon="live-tv">
     <ScrollView style={[styles.container, { direction }]} contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }} showsVerticalScrollIndicator={false}>
       <Pressable style={styles.addBtn} onPress={() => { resetForm(); setShowForm(true); }}>
         <MaterialIcons name="add" size={20} color="#FFF" /><Text style={styles.addBtnText}>{copy.addChannel}</Text>
@@ -337,11 +339,13 @@ export default function AdminChannels() {
         </Animated.View>
       ))}
     </ScrollView>
+    </AdminPageShell>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.primary, height: 48, borderRadius: 12, marginBottom: 16 },
   addBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
   bulkToolbar: { gap: 10, marginBottom: 16 },
