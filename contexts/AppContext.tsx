@@ -1,8 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
-import type { ContentItem, Favorite, WatchHistory, Banner, Channel, WatchRoom } from '../services/api';
+import type { ContentItem, WatchHistory, Banner, Channel, WatchRoom } from '../services/api';
 
 interface AppState {
   // Data
@@ -40,6 +40,8 @@ const HOME_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { currentUser, authMethod } = useAuth();
+  const homeLoadRef = useRef(0);
+  const userLoadRef = useRef(0);
   const [banners, setBanners] = useState<Banner[]>([]);
   const [trendingMovies, setTrendingMovies] = useState<ContentItem[]>([]);
   const [featuredMovies, setFeaturedMovies] = useState<ContentItem[]>([]);
@@ -54,6 +56,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [userDataLoading, setUserDataLoading] = useState(false);
   const [userRole, setUserRole] = useState('user');
+  const homeCacheKey = useMemo(
+    () => `${HOME_CACHE_KEY}:${authMethod || 'guest'}:${currentUser?.id || 'anon'}`,
+    [authMethod, currentUser?.id]
+  );
 
   const applyViewerCounts = useCallback((
     movies: ContentItem[],
@@ -83,13 +89,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadHomeData = useCallback(async () => {
+    const requestId = ++homeLoadRef.current;
     try {
       setLoading(true);
-      const cachedRaw = await AsyncStorage.getItem(HOME_CACHE_KEY).catch(() => null);
+      const cachedRaw = await AsyncStorage.getItem(homeCacheKey).catch(() => null);
       if (cachedRaw) {
         try {
           const cached = JSON.parse(cachedRaw);
           if (cached?.storedAt && Date.now() - cached.storedAt < HOME_CACHE_MAX_AGE_MS) {
+            if (homeLoadRef.current !== requestId) return;
             setBanners(cached.banners || []);
             applyViewerCounts(cached.movies || [], cached.series || [], cached.channelsData || [], null);
             setActiveRooms(cached.rooms || []);
@@ -109,12 +117,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.fetchActiveViewerCounts().catch(() => null),
       ]);
       
+      if (homeLoadRef.current !== requestId) return;
       setBanners(bannersData);
       applyViewerCounts(movies, series, channelsData, viewerCounts);
       setActiveRooms(rooms);
       const nextDynamicSections = await api.fetchDynamicHomeSections(currentUser?.id).catch(() => []);
+      if (homeLoadRef.current !== requestId) return;
       setDynamicSections(nextDynamicSections);
-      await AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+      await AsyncStorage.setItem(homeCacheKey, JSON.stringify({
         storedAt: Date.now(),
         banners: bannersData,
         movies,
@@ -126,11 +136,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Failed to load home data:', err);
     } finally {
-      setLoading(false);
+      if (homeLoadRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  }, [applyViewerCounts, currentUser?.id]);
+  }, [applyViewerCounts, currentUser?.id, homeCacheKey]);
 
   const loadUserData = useCallback(async () => {
+    const requestId = ++userLoadRef.current;
     if (!currentUser?.id || authMethod === 'subscription') {
       setFavorites([]);
       setWatchHistory([]);
@@ -145,6 +158,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         api.fetchFavorites(currentUser.id),
         api.fetchWatchHistory(currentUser.id),
       ]);
+      if (userLoadRef.current !== requestId) return;
       setFavorites(favData.map(f => f.content_id));
       setWatchHistory(historyData);
       
@@ -152,11 +166,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const { getSupabaseClient } = await import('@/template');
       const supabase = getSupabaseClient();
       const { data: profile } = await supabase.from('user_profiles').select('role').eq('id', currentUser.id).single();
+      if (userLoadRef.current !== requestId) return;
       if (profile?.role) setUserRole(profile.role);
     } catch (err) {
       console.error('Failed to load user data:', err);
     } finally {
-      setUserDataLoading(false);
+      if (userLoadRef.current === requestId) {
+        setUserDataLoading(false);
+      }
     }
   }, [authMethod, currentUser?.id]);
 
