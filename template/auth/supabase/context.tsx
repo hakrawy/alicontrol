@@ -7,6 +7,7 @@ import {
   clearPersistedSubscriptionSession,
   createSubscriptionAuthUser,
   isSubscriptionSessionExpired,
+  peekPersistedSubscriptionSession,
   persistSubscriptionSession,
   readPersistedSubscriptionSession,
   type SubscriptionSession,
@@ -56,6 +57,24 @@ const createEmptyState = (): AuthContextState => ({
   authMethod: null,
 });
 
+function createInitialState(): AuthContextState {
+  const subscriptionSession = peekPersistedSubscriptionSession();
+  if (subscriptionSession) {
+    const subscriptionState = buildSubscriptionState(subscriptionSession);
+    if (subscriptionState.currentUser) {
+      return {
+        ...createEmptyState(),
+        ...subscriptionState,
+        authLoading: false,
+        loading: false,
+        initialized: true,
+      };
+    }
+  }
+
+  return createEmptyState();
+}
+
 function buildEmailState(user: AuthUser | null): Partial<AuthContextState> {
   if (!user) {
     return {
@@ -94,9 +113,10 @@ function buildSubscriptionState(session: SubscriptionSession | null): Partial<Au
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [state, setState] = useState<AuthContextState>(createEmptyState());
+  const [state, setState] = useState<AuthContextState>(createInitialState);
   const mountedRef = React.useRef(true);
   const hydratingRef = React.useRef(false);
+  const sessionEpochRef = React.useRef(0);
 
   const updateState = useCallback((updates: Partial<AuthContextState>) => {
     setState((prevState) => ({ ...prevState, ...updates }));
@@ -104,12 +124,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const hydrateAuthState = useCallback(async () => {
     if (hydratingRef.current) return;
+    const epoch = ++sessionEpochRef.current;
     hydratingRef.current = true;
     updateState({ authLoading: true, loading: true });
 
     try {
       const storedSubscriptionSession = await readPersistedSubscriptionSession();
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || epoch !== sessionEpochRef.current) return;
 
       if (storedSubscriptionSession && !isSubscriptionSessionExpired(storedSubscriptionSession)) {
         updateState({
@@ -122,7 +143,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       const currentUser = await authService.getCurrentUser();
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || epoch !== sessionEpochRef.current) return;
 
       if (currentUser) {
         updateState({
@@ -145,7 +166,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
     } catch (error) {
       console.warn('[Template:AuthProvider] hydrateAuthState failed:', error);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || epoch !== sessionEpochRef.current) return;
       updateState({
         currentUser: null,
         user: null,
@@ -156,7 +177,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         initialized: true,
       });
     } finally {
-      hydratingRef.current = false;
+      if (epoch === sessionEpochRef.current) {
+        hydratingRef.current = false;
+      }
     }
   }, [updateState]);
 
@@ -164,6 +187,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     mountedRef.current = true;
     const failSafe = setTimeout(() => {
       if (!mountedRef.current) return;
+      hydratingRef.current = false;
       updateState({
         currentUser: null,
         user: null,
@@ -173,7 +197,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         loading: false,
         initialized: true,
       });
-      setHydrating(false);
     }, 1800);
 
     void hydrateAuthState().finally(() => clearTimeout(failSafe));
@@ -190,9 +213,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const loginWithPassword = useCallback(async (email: string, password: string) => {
     setOperationLoading(true);
+    const epoch = ++sessionEpochRef.current;
     try {
       const result = await authService.signInWithPassword(email, password);
-      if (result?.user) {
+      if (result?.user && epoch === sessionEpochRef.current) {
         updateState({
           ...buildEmailState(result.user),
           authLoading: false,
@@ -211,6 +235,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const loginWithSubscriptionCode = useCallback(async (code: string) => {
     setOperationLoading(true);
+    const epoch = ++sessionEpochRef.current;
     try {
       await authService.logout().catch(() => null);
       const remote = await validateSubscriptionCodeEdge({ code });
@@ -235,15 +260,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       await persistSubscriptionSession(session);
       const currentUser = createSubscriptionAuthUser(session, remote.label);
-      updateState({
-        currentUser,
-        user: currentUser,
-        isAuthenticated: true,
-        authMethod: 'subscription',
-        authLoading: false,
-        loading: false,
-        initialized: true,
-      });
+      if (epoch === sessionEpochRef.current) {
+        updateState({
+          currentUser,
+          user: currentUser,
+          isAuthenticated: true,
+          authMethod: 'subscription',
+          authLoading: false,
+          loading: false,
+          initialized: true,
+        });
+      }
 
       return { user: currentUser };
     } catch (error) {
@@ -257,6 +284,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(async () => {
     setOperationLoading(true);
+    sessionEpochRef.current += 1;
+    hydratingRef.current = false;
     try {
       await authService.logout().catch(() => null);
       await clearPersistedSubscriptionSession().catch(() => null);
@@ -304,9 +333,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const verifyOTPAndLogin = useCallback(async (...args: Parameters<typeof authService.verifyOTPAndLogin>) => {
     setOperationLoading(true);
+    const epoch = ++sessionEpochRef.current;
     try {
       const result = await authService.verifyOTPAndLogin(...args);
-      if (result?.user) {
+      if (result?.user && epoch === sessionEpochRef.current) {
         updateState({
           ...buildEmailState(result.user),
           authLoading: false,
