@@ -244,6 +244,7 @@ export interface ImportValidationSummary {
   validated: number;
   skipped: number;
   failedSamples: string[];
+  warnings?: string[];
 }
 
 function isHttpUrl(rawUrl: string): boolean {
@@ -1285,38 +1286,112 @@ function parseSeasonEpisodeFromText(value: string) {
 }
 
 export async function importChannelsFromM3UUrl(playlistUrl: string) {
-  const result = await importM3UEdge({ m3uUrl: playlistUrl.trim() });
-  return {
-    imported: Number(result.imported || 0),
-    total: Number(result.total || 0),
-    validated: Number(result.validated || result.total || 0),
-    skipped: Number(result.skipped || 0),
-    failedSamples: Array.isArray(result.failedSamples) ? result.failedSamples : [],
-  } as ImportValidationSummary;
+  return importM3UUrlWithFallback(playlistUrl.trim(), 'channels');
 }
 
 export async function importMoviesFromM3UUrl(playlistUrl: string) {
-  const result = await importM3UEdge({ m3uUrl: playlistUrl.trim() });
-  return {
-    imported: Number(result.imported || 0),
-    total: Number(result.total || 0),
-    validated: Number(result.validated || result.total || 0),
-    skipped: Number(result.skipped || 0),
-    failedSamples: Array.isArray(result.failedSamples) ? result.failedSamples : [],
-  } as ImportValidationSummary;
+  return importM3UUrlWithFallback(playlistUrl.trim(), 'movies');
 }
 
 export async function importSeriesFromM3UUrl(playlistUrl: string) {
-  const result = await importM3UEdge({ m3uUrl: playlistUrl.trim() });
+  const result = await importM3UUrlWithFallback(playlistUrl.trim(), 'series');
   return {
-    imported: Number(result.importedEpisodes || result.imported || 0),
-    total: Number(result.total || 0),
-    validated: Number(result.validated || result.total || 0),
-    skipped: Number(result.skipped || 0),
-    failedSamples: Array.isArray(result.failedSamples) ? result.failedSamples : [],
+    ...result,
     importedSeries: Number(result.importedSeries || 0),
-    importedEpisodes: Number(result.importedEpisodes || result.imported || 0),
+    importedEpisodes: Number(result.importedEpisodes || 0),
+  } as ImportValidationSummary & {
+    importedSeries: number;
+    importedEpisodes: number;
   };
+}
+
+type M3UImportKind = 'channels' | 'movies' | 'series';
+
+function normalizeM3UImportSummary(
+  result: any,
+  kind: M3UImportKind,
+  warnings: string[] = []
+): ImportValidationSummary & { importedSeries?: number; importedEpisodes?: number } {
+  const total = Number(result?.total || 0);
+  const validated = Number(result?.validated || total || 0);
+  const skipped = Number(result?.skipped || 0);
+  const failedSamples = Array.isArray(result?.failedSamples)
+    ? result.failedSamples.filter((item: unknown) => typeof item === 'string')
+    : Array.isArray(result?.errors)
+      ? result.errors.slice(0, 5).filter((item: unknown) => typeof item === 'string')
+      : [];
+
+  if (kind === 'series') {
+    const importedSeries = Number(result?.importedSeries || result?.series || result?.imported || 0);
+    const importedEpisodes = Number(result?.importedEpisodes || result?.imported || 0);
+    return {
+      imported: importedEpisodes || importedSeries,
+      total,
+      validated,
+      skipped,
+      failedSamples,
+      warnings: warnings.length ? warnings : undefined,
+      importedSeries,
+      importedEpisodes,
+    };
+  }
+
+  const imported = Number(
+    kind === 'movies'
+      ? result?.importedMovies ?? result?.movies ?? result?.imported ?? 0
+      : result?.importedChannels ?? result?.channels ?? result?.imported ?? 0
+  );
+
+  return {
+    imported,
+    total,
+    validated,
+    skipped,
+    failedSamples,
+    warnings: warnings.length ? warnings : undefined,
+  };
+}
+
+async function importM3UUrlWithFallback(playlistUrl: string, kind: M3UImportKind) {
+  const url = playlistUrl.trim();
+  try {
+    const result = await importM3UEdge({ m3uUrl: url });
+    return normalizeM3UImportSummary(result, kind);
+  } catch (error) {
+    const warnings = [`Edge Function import failed: ${getErrorMessage(error, 'Unavailable')}`];
+    try {
+      const externalImport = await import('./externalImport');
+      const preview = await externalImport.readExternalImportSource(url, 'playlist');
+      const importResult = await externalImport.importExternalItems(preview.items, {
+        sourceUrl: preview.requestedUrl,
+        provider: 'playlist',
+        sourceKind: preview.sourceKind,
+      });
+      return normalizeM3UImportSummary(
+        {
+          total: importResult.total,
+          validated: importResult.total,
+          skipped: importResult.skipped,
+          imported: kind === 'series'
+            ? importResult.series
+            : kind === 'movies'
+              ? importResult.movies
+              : importResult.channels,
+          importedSeries: importResult.series,
+          importedEpisodes: 0,
+          failedSamples: importResult.errors,
+        },
+        kind,
+        [...warnings, ...(Array.isArray(preview.warnings) ? preview.warnings : [])]
+      );
+    } catch (fallbackError) {
+      throw new Error(
+        `${getErrorMessage(error, 'Import failed')}${
+          fallbackError ? `; Fallback import failed: ${getErrorMessage(fallbackError, 'Import failed')}` : ''
+        }`
+      );
+    }
+  }
 }
 
 async function findExistingContentRef(key: string | null, contentType: 'movie' | 'series' | 'episode') {
