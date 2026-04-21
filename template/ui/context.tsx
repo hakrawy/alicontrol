@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { Platform, Alert } from 'react-native';
 import { AlertButton, AlertState } from './types';
 
@@ -17,11 +17,13 @@ interface AlertProviderProps {
 }
 
 export function AlertProvider({ children }: AlertProviderProps) {
+  const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [alertState, setAlertState] = useState<AlertState>({
     visible: false,
     title: '',
     message: '',
-    buttons: []
+    buttons: [],
+    autoDismissMs: null,
   });
 
   const showAlert = (
@@ -31,20 +33,22 @@ export function AlertProvider({ children }: AlertProviderProps) {
   ) => {
     // Parameter normalization
     const normalizedMessage = message || '';
-    const normalizedButtons = buttons?.length ? buttons : [{ 
-      text: 'OK',
-      onPress: () => {}
-    }];
 
     if (Platform.OS === 'web') {
-      // Web: Use internal modal
+      const shouldAutoDismiss = !buttons || buttons.length === 0;
+      const normalizedButtons = buttons?.length ? buttons : [];
       setAlertState({
         visible: true,
         title,
         message: normalizedMessage,
-        buttons: normalizedButtons
+        buttons: normalizedButtons,
+        autoDismissMs: shouldAutoDismiss ? 2200 : null,
       });
     } else {
+      const normalizedButtons = buttons?.length ? buttons : [{
+        text: 'OK',
+        onPress: () => {},
+      }];
       // Mobile: Use native Alert.alert
       const alertButtons = normalizedButtons.map(button => ({
         text: button.text,
@@ -57,6 +61,10 @@ export function AlertProvider({ children }: AlertProviderProps) {
   };
 
   const hideAlert = () => {
+    if (autoDismissTimerRef.current) {
+      clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = null;
+    }
     setAlertState(prev => ({ ...prev, visible: false }));
   };
 
@@ -77,6 +85,28 @@ export function AlertProvider({ children }: AlertProviderProps) {
   const contextValue: AlertContextType = {
     showAlert
   };
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (!alertState.visible || !alertState.autoDismissMs) return;
+
+    if (autoDismissTimerRef.current) {
+      clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = null;
+    }
+
+    autoDismissTimerRef.current = setTimeout(() => {
+      setAlertState((prev) => ({ ...prev, visible: false, autoDismissMs: null }));
+      autoDismissTimerRef.current = null;
+    }, alertState.autoDismissMs);
+
+    return () => {
+      if (autoDismissTimerRef.current) {
+        clearTimeout(autoDismissTimerRef.current);
+        autoDismissTimerRef.current = null;
+      }
+    };
+  }, [alertState.autoDismissMs, alertState.visible]);
 
   return (
     <AlertContext.Provider value={contextValue}>
@@ -158,8 +188,9 @@ function WebAlertModal({ alertState, onButtonPress, onHide }: WebAlertModalProps
             ) : null}
           </View>
           
-          <View style={styles.buttonContainer}>
-            {alertState.buttons.length === 1 ? (
+          {alertState.buttons.length > 0 ? (
+            <View style={styles.buttonContainer}>
+              {alertState.buttons.length === 1 ? (
               // Single button layout
               <TouchableOpacity 
                 style={[styles.button, styles.singleButton]}
@@ -170,7 +201,7 @@ function WebAlertModal({ alertState, onButtonPress, onHide }: WebAlertModalProps
                   {alertState.buttons[0].text}
                 </Text>
               </TouchableOpacity>
-            ) : (
+              ) : (
               // Multiple button layout (horizontal)
               <View style={styles.multiButtonContainer}>
                 {alertState.buttons.map((button, index) => (
@@ -186,8 +217,13 @@ function WebAlertModal({ alertState, onButtonPress, onHide }: WebAlertModalProps
                   </TouchableOpacity>
                 ))}
               </View>
-            )}
-          </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.autoDismissFooter}>
+              <Text style={styles.autoDismissText}>This message will disappear automatically.</Text>
+            </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -243,6 +279,17 @@ const styles = StyleSheet.create({
   buttonContainer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#D1D1D6',
+  },
+  autoDismissFooter: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#D1D1D6',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  autoDismissText: {
+    fontSize: 13,
+    color: '#86868B',
+    textAlign: 'center',
   },
   multiButtonContainer: {
     flexDirection: 'row',

@@ -10,4 +10,5 @@ export interface AlertState {
   title: string;
   message: string;
   buttons: AlertButton[];
+  autoDismissMs?: number | null;
 }
