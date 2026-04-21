@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, ScrollView, Pressable, TextInput, StyleSheet, Dimensions, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -151,7 +151,9 @@ export default function WatchRoomScreen() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadRooms(); }, [loadRooms]);
+  useEffect(() => {
+    loadRooms();
+  }, [loadRooms]);
 
   useEffect(() => {
     if (!joinedRoom || !roomId) return;

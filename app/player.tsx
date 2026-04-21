@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { View, Text, Pressable, StyleSheet, Linking, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
-import Hls, { Events, ErrorTypes } from 'hls.js';
+import HlsJs, { Events, ErrorTypes } from 'hls.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../constants/theme';
 import { useAuth } from '@/template';
@@ -28,6 +28,8 @@ import type { PlaybackSource, PlaybackSourceDiagnostic, SourceHistoryRecord } fr
 
 type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
 type PlayerSource = PlaybackSource;
+
+const hlsIsSupported = Reflect.get(HlsJs, 'isSupported') as (() => boolean) | undefined;
 
 function getYouTubeVideoId(rawUrl: string): string | null {
   try {
@@ -341,7 +343,7 @@ function WebDirectPlayer({
   const [playbackError, setPlaybackError] = useState('');
   const [captionsEnabled, setCaptionsEnabled] = useState(Boolean(subtitleUrl));
   const [progressTrackWidth, setProgressTrackWidth] = useState(0);
-  const [hlsLevels, setHlsLevels] = useState<Array<{ height: number; bitrate: number; index: number }>>([]);
+  const [hlsLevels, setHlsLevels] = useState<{ height: number; bitrate: number; index: number }[]>([]);
   const [currentLevel, setCurrentLevel] = useState(-1);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -350,7 +352,7 @@ function WebDirectPlayer({
   const startupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<any>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const hlsRef = useRef<HlsJs | null>(null);
   const didApplyResumeRef = useRef(false);
   const didReportSuccessRef = useRef(false);
 
@@ -428,7 +430,7 @@ function WebDirectPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    let hls: Hls | null = null;
+    let hls: HlsJs | null = null;
     let mediaErrorCount = 0;
     let networkErrorCount = 0;
 
@@ -463,8 +465,8 @@ function WebDirectPlayer({
       }
     }, 15000);
 
-    if (isHlsUrl(playbackUrl) && Hls.isSupported()) {
-      hls = new Hls({
+    if (isHlsUrl(playbackUrl) && hlsIsSupported?.()) {
+      hls = new HlsJs({
         lowLatencyMode: false,
         enableWorker: true,
         backBufferLength: 90,
@@ -1627,9 +1629,9 @@ function PlayerScreen() {
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
   const [autoFallbackReason, setAutoFallbackReason] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [historyByKey, setHistoryByKey] = useState<Record<string, SourceHistoryRecord | undefined>>({});
+  const [, setHistoryByKey] = useState<Record<string, SourceHistoryRecord | undefined>>({});
   const [failedSourceKeys, setFailedSourceKeys] = useState<string[]>([]);
-  const [diagnostics, setDiagnostics] = useState<PlaybackSourceDiagnostic[]>([]);
+  const [, setDiagnostics] = useState<PlaybackSourceDiagnostic[]>([]);
   const [isPreflighting, setIsPreflighting] = useState(true);
   const [preflightLogs, setPreflightLogs] = useState<string[]>(['Initializing player...']);
   const [proxyUrl, setProxyUrl] = useState('');
