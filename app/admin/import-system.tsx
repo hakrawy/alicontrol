@@ -4,22 +4,59 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAlert } from '@/template';
-import { importM3U, importXtream, type ImportOperationResult } from '../../src/lib/edgeFunctions';
-import { clearImportHistory, fetchImportHistory, recordImportHistoryEntry, type ImportHistoryEntry } from '../../services/importSystem';
+import {
+  clearImportHistory,
+  fetchImportHistory,
+  importSystemItems,
+  readM3UImportPreview,
+  readXtreamPreview,
+  recordImportHistoryEntry,
+  type ImportHistoryEntry,
+  type ImportSystemPreview,
+} from '../../services/importSystem';
 import { recordAdminActivity } from '../../services/adminActivity';
 import { theme } from '../../constants/theme';
 import { useLocale } from '../../contexts/LocaleContext';
 
 type Mode = 'xtream' | 'm3u';
 
-type ImportSummary = ImportOperationResult & {
+type ImportSummary = {
+  total: number;
+  imported: number;
+  validated: number;
+  skipped: number;
+  importedSeries: number;
+  importedEpisodes: number;
+  failedSamples?: string[];
+  warnings?: string[];
   mode: Mode;
   label: string;
 };
 
-function buildSummary(mode: Mode, result: ImportOperationResult): ImportSummary {
+function buildSummary(
+  mode: Mode,
+  preview: ImportSystemPreview,
+  result: {
+    total: number;
+    imported: number;
+    merged: number;
+    skipped: number;
+    failed: number;
+    channels: number;
+    movies: number;
+    series: number;
+    errors: string[];
+  }
+): ImportSummary {
   return {
-    ...result,
+    total: Number(preview.total || result.total || 0),
+    imported: Number(result.imported || 0) + Number(result.merged || 0),
+    validated: Number(preview.total || result.total || 0),
+    skipped: Number(result.skipped || 0),
+    importedSeries: Number(result.series || 0),
+    importedEpisodes: 0,
+    failedSamples: Array.isArray(result.errors) ? result.errors.slice(0, 3) : [],
+    warnings: Array.isArray(preview.warnings) ? preview.warnings : [],
     mode,
     label: mode === 'xtream' ? 'Xtream Import' : 'M3U Import',
   };
@@ -126,25 +163,30 @@ export default function ImportSystemAdmin() {
       setErrorMessage('');
       setSummary(null);
 
-      const result = mode === 'xtream'
-        ? await importXtream({ host, username, password })
-        : await importM3U({ m3uUrl });
+      const preview = mode === 'xtream'
+        ? await readXtreamPreview({ host, username, password })
+        : await readM3UImportPreview(m3uUrl);
+      const result = await importSystemItems(preview);
 
-      const nextSummary = buildSummary(mode, result);
+      const nextSummary = buildSummary(mode, preview, result);
       setSummary(nextSummary);
       await storeHistoryEntry({
         mode,
         label: String(nextSummary.label),
-        requestedUrl: String(mode === 'xtream' ? host : m3uUrl),
-        resolvedUrl: String((result as { resolvedUrl?: string }).resolvedUrl || (mode === 'xtream' ? host : m3uUrl)),
+        requestedUrl: String(preview.requestedUrl || (mode === 'xtream' ? host : m3uUrl)),
+        resolvedUrl: String(preview.resolvedUrl || (mode === 'xtream' ? host : m3uUrl)),
         status: 'success',
-        message: String(copy.success),
+        message: String(nextSummary.warnings?.length ? `${copy.success} (${nextSummary.warnings[0]})` : copy.success),
         total: Number(nextSummary.total || 0),
         imported: Number(nextSummary.imported || 0),
         skipped: Number(nextSummary.skipped || 0),
         validated: Number(nextSummary.validated || 0),
       });
-      void logAdminActivity('Import completed', `${nextSummary.label} imported ${Number(nextSummary.imported || 0)} items.`, 'success');
+      void logAdminActivity(
+        'Import completed',
+        `${nextSummary.label} imported ${Number(nextSummary.imported || 0)} items${nextSummary.warnings?.length ? ' with fallback' : ''}.`,
+        nextSummary.warnings?.length ? 'warning' : 'success'
+      );
       showAlert(copy.success, `${copy.imported}: ${Number(nextSummary.imported || 0)}`);
     } catch (error: any) {
       const message = error?.message || (ar ? 'تعذر إكمال العملية.' : 'Could not complete the request.');
@@ -273,6 +315,14 @@ export default function ImportSystemAdmin() {
               {copy.failedSamples}: {summary.failedSamples.slice(0, 3).join(', ')}
             </Text>
           ) : null}
+          {Array.isArray(summary.warnings) && summary.warnings.length > 0 ? (
+            <View style={styles.warningBox}>
+              <MaterialIcons name="warning-amber" size={18} color="#FBBF24" />
+              <Text style={styles.warningText}>
+                {summary.warnings.slice(0, 2).join(' • ')}
+              </Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -364,6 +414,8 @@ const styles = StyleSheet.create({
   summaryValue: { color: '#FFF', fontSize: 18, fontWeight: '900' },
   summaryLabel: { color: theme.textSecondary, fontSize: 11, fontWeight: '700', marginTop: 4 },
   summaryText: { color: '#DCFCE7', fontSize: 12, lineHeight: 18 },
+  warningBox: { marginTop: 4, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(251,191,36,0.22)', backgroundColor: 'rgba(251,191,36,0.08)', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  warningText: { flex: 1, color: '#FEF3C7', fontSize: 12, lineHeight: 18 },
   errorCard: { marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(239,68,68,0.22)', backgroundColor: 'rgba(239,68,68,0.08)', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#FECACA', fontSize: 12, lineHeight: 18 },
   historyCard: { marginTop: 14, borderRadius: 20, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface, padding: 14, gap: 10 },

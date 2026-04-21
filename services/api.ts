@@ -414,6 +414,21 @@ export interface RoomMessage {
   user?: { username: string; avatar: string };
 }
 
+export interface RoomEvent {
+  id: string;
+  room_id: string;
+  actor_id: string | null;
+  event_type: string;
+  media_id?: string | null;
+  media_type?: 'movie' | 'series' | 'episode' | 'channel' | null;
+  position_ms: number;
+  playback_rate: number;
+  payload: Record<string, any>;
+  idempotency_key: string;
+  sequence_no: number;
+  created_at: string;
+}
+
 export interface Favorite {
   id: string;
   user_id: string;
@@ -2796,6 +2811,25 @@ export async function createWatchRoom(room: {
     supabase.from('watch_room_members').insert({ room_id: data.id, user_id: room.host_id }),
     'Failed to add host to watch room.'
   );
+  await Promise.all([
+    writeSupabaseMutation(
+      supabase.from('room_roles').upsert({
+        room_id: data.id,
+        user_id: room.host_id,
+        role: 'host',
+        granted_by: room.host_id,
+      }, { onConflict: 'room_id,user_id' }),
+      'Failed to register host room role.'
+    ),
+    upsertRoomPresence({
+      roomId: data.id,
+      userId: room.host_id,
+      role: 'host',
+      state: {
+        username: data.host?.username || 'Host',
+      },
+    }).catch(() => null),
+  ]).catch(() => null);
   return normalizeWatchRoom(data);
 }
 
@@ -2804,6 +2838,11 @@ export async function joinWatchRoom(roomId: string, userId: string) {
     supabase.from('watch_room_members').upsert({ room_id: roomId, user_id: userId }, { onConflict: 'room_id,user_id' }),
     'Failed to join watch room.'
   );
+  await upsertRoomPresence({
+    roomId,
+    userId,
+    role: 'member',
+  }).catch(() => null);
 }
 
 export async function leaveWatchRoom(roomId: string, userId: string) {
@@ -2811,6 +2850,10 @@ export async function leaveWatchRoom(roomId: string, userId: string) {
     supabase.from('watch_room_members').delete().eq('room_id', roomId).eq('user_id', userId),
     'Failed to leave watch room.'
   );
+  await writeSupabaseMutation(
+    supabase.from('room_presence').delete().eq('room_id', roomId).eq('user_id', userId),
+    'Failed to leave room presence.'
+  ).catch(() => null);
 }
 
 export async function fetchRoomMessages(roomId: string) {
@@ -2826,12 +2869,118 @@ export async function fetchRoomMessages(roomId: string) {
   );
 }
 
+export interface RoomRole {
+  room_id: string;
+  user_id: string;
+  role: 'host' | 'co-host' | 'moderator' | 'member';
+  granted_by?: string | null;
+  granted_at?: string;
+}
+
+export interface RoomPresenceRecord {
+  room_id: string;
+  user_id: string;
+  role: 'host' | 'co-host' | 'moderator' | 'member';
+  joined_at: string;
+  last_seen_at: string;
+  state?: Record<string, any>;
+  user?: { username: string; avatar: string };
+}
+
+export async function fetchRoomRoles(roomId: string) {
+  return readSupabaseRows<RoomRole>(
+    supabase
+      .from('room_roles')
+      .select('*')
+      .eq('room_id', roomId)
+      .order('granted_at', { ascending: false }),
+    [],
+    'Failed to fetch room roles.'
+  );
+}
+
+export async function fetchRoomPresence(roomId: string) {
+  return readSupabaseRows<RoomPresenceRecord>(
+    supabase
+      .from('room_presence')
+      .select('*, user:user_profiles!room_presence_user_id_fkey(username, avatar)')
+      .eq('room_id', roomId)
+      .order('last_seen_at', { ascending: false }),
+    [],
+    'Failed to fetch room presence.'
+  );
+}
+
+export async function fetchRoomBans(roomId: string) {
+  return readSupabaseRows<any>(
+    supabase
+      .from('room_bans')
+      .select('*')
+      .eq('room_id', roomId)
+      .eq('is_active', true)
+      .order('banned_at', { ascending: false }),
+    [],
+    'Failed to fetch room bans.'
+  );
+}
+
 export async function sendRoomMessage(roomId: string, userId: string, message: string) {
   const data = await writeSupabaseRow<any>(
     supabase.from('room_messages').insert({ room_id: roomId, user_id: userId, message }).select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)').single(),
     'Failed to send room message.'
   );
   return data as RoomMessage;
+}
+
+export async function fetchRoomEvents(roomId: string) {
+  const rows = await readSupabaseRows<any>(
+    supabase.from('room_events').select('*').eq('room_id', roomId).order('sequence_no', { ascending: true }).limit(100),
+    [],
+    'Failed to fetch room events.'
+  );
+  return rows as RoomEvent[];
+}
+
+export async function appendRoomEvent(event: Omit<RoomEvent, 'id' | 'created_at' | 'sequence_no'> & { sequence_no?: number }) {
+  const data = await writeSupabaseRow<any>(
+    supabase
+      .from('room_events')
+      .insert({
+        room_id: event.room_id,
+        actor_id: event.actor_id,
+        event_type: event.event_type,
+        media_id: event.media_id || null,
+        media_type: event.media_type || null,
+        position_ms: event.position_ms || 0,
+        playback_rate: event.playback_rate || 1,
+        payload: event.payload || {},
+        idempotency_key: event.idempotency_key,
+        sequence_no: event.sequence_no || undefined,
+      })
+      .select('*')
+      .single(),
+    'Failed to append room event.'
+  );
+  return data as RoomEvent;
+}
+
+export async function upsertRoomPresence(input: {
+  roomId: string;
+  userId: string;
+  role?: 'host' | 'co-host' | 'moderator' | 'member';
+  state?: Record<string, any>;
+}) {
+  await writeSupabaseMutation(
+    supabase.from('room_presence').upsert({
+      room_id: input.roomId,
+      user_id: input.userId,
+      role: input.role || 'member',
+      state: input.state || {},
+      last_seen_at: new Date().toISOString(),
+      joined_at: new Date().toISOString(),
+    }, { onConflict: 'room_id,user_id' }),
+    'Failed to update room presence.'
+  );
 }
 
 export async function updateRoomPlayback(roomId: string, playbackTime: number, isPlaying: boolean) {

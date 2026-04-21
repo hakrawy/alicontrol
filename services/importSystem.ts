@@ -2,6 +2,7 @@ import * as externalImport from './externalImport';
 import type { ExternalImportItem, ExternalImportPreview } from './externalImport';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { importM3U as importM3UEdge, importXtream as importXtreamEdge } from '@/src/lib/edgeFunctions';
+import { getErrorMessage } from '@/services/http';
 
 export interface XtreamCredentials {
   host: string;
@@ -107,6 +108,11 @@ async function fetchJsonEndpoint<T>(url: string, timeoutMs = 18000): Promise<T> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+function buildFallbackWarning(mode: 'xtream' | 'm3u', error: unknown) {
+  const message = getErrorMessage(error, 'Unknown error');
+  return `${mode.toUpperCase()} server import fallback used: ${message}`;
 }
 
 function createHistoryId() {
@@ -281,40 +287,65 @@ async function mapSeries(rows: any[], credentials: XtreamCredentials, categories
   return items;
 }
 
-export async function readXtreamPreview(credentialsInput: XtreamCredentials, options?: { includeSeriesInfo?: boolean; maxSeriesInfoRequests?: number }) {
+async function buildLocalXtreamPreview(
+  credentialsInput: XtreamCredentials,
+  options?: { includeSeriesInfo?: boolean; maxSeriesInfoRequests?: number }
+) {
   const credentials = normalizeXtreamCredentials(credentialsInput);
-  if (!isValidCredentials(credentials)) {
-    throw new Error('Host, username, and password are required.');
-  }
+  const warnings: string[] = [];
 
-  const result = await importXtreamEdge({
-    host: credentials.host,
-    username: credentials.username,
-    password: credentials.password,
-  });
+  const fetchRows = async (action: string, label: string) => {
+    try {
+      return await fetchJsonEndpoint<any[]>(apiUrl(credentials, action), 12000);
+    } catch (error) {
+      warnings.push(`${label}: ${getErrorMessage(error, 'Unavailable')}`);
+      return [] as any[];
+    }
+  };
 
-  const items = Array.isArray(result.items) ? result.items as ExternalImportItem[] : [];
+  const [categories, liveRows, vodRows, seriesRows] = await Promise.all([
+    fetchCategories(credentials).catch((error) => {
+      warnings.push(`Categories: ${getErrorMessage(error, 'Unavailable')}`);
+      return {} as Record<string, string>;
+    }),
+    fetchRows('get_live_streams', 'Live streams'),
+    fetchRows('get_vod_streams', 'VOD streams'),
+    fetchRows('get_series', 'Series'),
+  ]);
+
+  const seriesInfoRequests = options?.includeSeriesInfo
+    ? Math.max(0, options.maxSeriesInfoRequests ?? 3)
+    : 0;
+
+  const items = [
+    ...mapLiveStreams(liveRows, credentials, categories),
+    ...mapVodStreams(vodRows, credentials, categories),
+    ...(await mapSeries(seriesRows, credentials, categories, seriesInfoRequests)),
+  ];
+
   return {
     provider: 'custom',
     requestedUrl: credentials.fullUrl || credentials.host,
-    resolvedUrl: result.resolvedUrl || credentials.fullUrl || credentials.host,
+    resolvedUrl: credentials.fullUrl || credentials.host,
     sourceKind: 'api',
-    contentType: result.contentType || 'application/json',
-    total: Number(result.total || items.length || 0),
+    contentType: 'application/json',
+    total: items.length,
     items,
-    warnings: Array.isArray(result.warnings) ? result.warnings : [],
-    liveCount: Number(result.liveCount || items.filter((item) => item.type === 'channel').length),
-    vodCount: Number(result.vodCount || items.filter((item) => item.type === 'movie').length),
-    seriesCount: Number(result.seriesCount || items.filter((item) => item.type === 'series').length),
-    endpointStatus: Array.isArray(result.endpointStatus)
-      ? result.endpointStatus as ImportSystemPreview['endpointStatus']
-      : [],
+    warnings,
+    liveCount: items.filter((item) => item.type === 'channel').length,
+    vodCount: items.filter((item) => item.type === 'movie').length,
+    seriesCount: items.filter((item) => item.type === 'series').length,
+    endpointStatus: [
+      { name: 'Live streams', ok: liveRows.length > 0, message: `${liveRows.length} items` },
+      { name: 'VOD streams', ok: vodRows.length > 0, message: `${vodRows.length} items` },
+      { name: 'Series', ok: seriesRows.length > 0, message: `${seriesRows.length} items` },
+    ],
   } as ImportSystemPreview;
 }
 
-export async function readM3UImportPreview(url: string) {
-  const preview = await importM3UEdge({ m3uUrl: url });
-  const items = Array.isArray(preview.items) ? preview.items as ExternalImportItem[] : [];
+async function buildLocalM3UPreview(url: string) {
+  const preview = await externalImport.readExternalImportSource(url, 'playlist');
+  const items = Array.isArray(preview.items) ? (preview.items as ExternalImportItem[]) : [];
   return {
     provider: 'playlist',
     requestedUrl: url,
@@ -324,11 +355,85 @@ export async function readM3UImportPreview(url: string) {
     total: Number(preview.total || items.length || 0),
     items,
     warnings: Array.isArray(preview.warnings) ? preview.warnings : [],
-    liveCount: Number(preview.liveCount || items.filter((item) => item.type === 'channel').length),
-    vodCount: Number(preview.vodCount || items.filter((item) => item.type === 'movie').length),
-    seriesCount: Number(preview.seriesCount || items.filter((item) => item.type === 'series').length),
+    liveCount: Number(items.filter((item) => item.type === 'channel').length),
+    vodCount: Number(items.filter((item) => item.type === 'movie').length),
+    seriesCount: Number(items.filter((item) => item.type === 'series').length),
     endpointStatus: [{ name: 'M3U', ok: items.length > 0 || Number(preview.total || 0) > 0, message: `${items.length || Number(preview.total || 0)} items` }],
   } as ImportSystemPreview;
+}
+
+export async function readXtreamPreview(credentialsInput: XtreamCredentials, options?: { includeSeriesInfo?: boolean; maxSeriesInfoRequests?: number }) {
+  const credentials = normalizeXtreamCredentials(credentialsInput);
+  if (!isValidCredentials(credentials)) {
+    throw new Error('Host, username, and password are required.');
+  }
+
+  try {
+    const result = await importXtreamEdge({
+      host: credentials.host,
+      username: credentials.username,
+      password: credentials.password,
+    });
+
+    const items = Array.isArray(result.items) ? result.items as ExternalImportItem[] : [];
+    return {
+      provider: 'custom',
+      requestedUrl: credentials.fullUrl || credentials.host,
+      resolvedUrl: result.resolvedUrl || credentials.fullUrl || credentials.host,
+      sourceKind: 'api',
+      contentType: result.contentType || 'application/json',
+      total: Number(result.total || items.length || 0),
+      items,
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      liveCount: Number(result.liveCount || items.filter((item) => item.type === 'channel').length),
+      vodCount: Number(result.vodCount || items.filter((item) => item.type === 'movie').length),
+      seriesCount: Number(result.seriesCount || items.filter((item) => item.type === 'series').length),
+      endpointStatus: Array.isArray(result.endpointStatus)
+        ? result.endpointStatus as ImportSystemPreview['endpointStatus']
+        : [],
+    } as ImportSystemPreview;
+  } catch (error) {
+    const fallback = await buildLocalXtreamPreview(credentials, options);
+    return {
+      ...fallback,
+      warnings: [...(fallback.warnings || []), buildFallbackWarning('xtream', error)],
+      endpointStatus: [
+        { name: 'Edge Function', ok: false, message: getErrorMessage(error, 'Unavailable') },
+        ...(fallback.endpointStatus || []),
+      ],
+    } as ImportSystemPreview;
+  }
+}
+
+export async function readM3UImportPreview(url: string) {
+  try {
+    const preview = await importM3UEdge({ m3uUrl: url });
+    const items = Array.isArray(preview.items) ? preview.items as ExternalImportItem[] : [];
+    return {
+      provider: 'playlist',
+      requestedUrl: url,
+      resolvedUrl: preview.resolvedUrl || url,
+      sourceKind: 'm3u',
+      contentType: preview.contentType || 'application/vnd.apple.mpegurl',
+      total: Number(preview.total || items.length || 0),
+      items,
+      warnings: Array.isArray(preview.warnings) ? preview.warnings : [],
+      liveCount: Number(preview.liveCount || items.filter((item) => item.type === 'channel').length),
+      vodCount: Number(preview.vodCount || items.filter((item) => item.type === 'movie').length),
+      seriesCount: Number(preview.seriesCount || items.filter((item) => item.type === 'series').length),
+      endpointStatus: [{ name: 'M3U', ok: items.length > 0 || Number(preview.total || 0) > 0, message: `${items.length || Number(preview.total || 0)} items` }],
+    } as ImportSystemPreview;
+  } catch (error) {
+    const fallback = await buildLocalM3UPreview(url);
+    return {
+      ...fallback,
+      warnings: [...(fallback.warnings || []), buildFallbackWarning('m3u', error)],
+      endpointStatus: [
+        { name: 'Edge Function', ok: false, message: getErrorMessage(error, 'Unavailable') },
+        ...(fallback.endpointStatus || []),
+      ],
+    } as ImportSystemPreview;
+  }
 }
 
 export async function importSystemItems(preview: ImportSystemPreview) {

@@ -25,6 +25,7 @@ import { mapSourceHealthMeta } from '../services/playback/sourceHealthMapper';
 import { pickFallbackIndex } from '../services/playback/fallbackManager';
 import { buildSourceKey, createPlaybackDiagnostic } from '../services/playback/diagnostics';
 import type { PlaybackSource, PlaybackSourceDiagnostic, SourceHistoryRecord } from '../services/playback/types';
+import { startWatchRoomRealtime, type RoomPlaybackEvent } from '../services/watchroomRealtime';
 
 type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
 type PlayerSource = PlaybackSource;
@@ -318,6 +319,12 @@ function WebDirectPlayer({
   initialResumeTime = 0,
   onProgress,
   onPlaybackSuccess,
+  roomId = '',
+  viewerContentId = '',
+  viewerContentType,
+  syncUserId = null,
+  syncUsername = null,
+  syncAvatar = null,
 }: {
   url: string;
   title: string;
@@ -331,6 +338,12 @@ function WebDirectPlayer({
   initialResumeTime?: number;
   onProgress?: (currentTime: number, duration: number) => void;
   onPlaybackSuccess?: () => void;
+  roomId?: string;
+  viewerContentId?: string;
+  viewerContentType?: api.ViewerContentType;
+  syncUserId?: string | null;
+  syncUsername?: string | null;
+  syncAvatar?: string | null;
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -359,10 +372,108 @@ function WebDirectPlayer({
   const hlsRef = useRef<HlsLibrary | null>(null);
   const didApplyResumeRef = useRef(false);
   const didReportSuccessRef = useRef(false);
+  const roomSyncRef = useRef<ReturnType<typeof startWatchRoomRealtime> | null>(null);
+  const suppressRoomBroadcastRef = useRef(false);
+  const lastRoomEventKeyRef = useRef<string>('');
 
   const activeSource = sources[selectedSourceIndex];
   const playbackUrl = activeSource?.resolvedPlaybackUrl || url;
   const sourceHeaders = useMemo(() => activeSource?.headers || {}, [activeSource?.headers]);
+
+  const pushRoomEvent = useCallback(
+    async (eventType: RoomPlaybackEvent['event_type'], payload: Record<string, any> = {}) => {
+      if (!roomId || !syncUserId || suppressRoomBroadcastRef.current) return;
+      const sync = roomSyncRef.current;
+      if (!sync) return;
+
+      const eventKey = `${eventType}:${payload.position_ms ?? payload.source_index ?? payload.media_id ?? ''}:${Date.now()}`;
+      lastRoomEventKeyRef.current = eventKey;
+
+      await sync.sendPlaybackEvent({
+        id: eventKey,
+        room_id: roomId,
+        actor_id: syncUserId,
+        event_type: eventType,
+        media_id: viewerContentId || null,
+        media_type: viewerContentType || null,
+        position_ms: typeof payload.position_ms === 'number' ? payload.position_ms : undefined,
+        playback_rate: typeof payload.playback_rate === 'number' ? payload.playback_rate : undefined,
+        payload: {
+          ...payload,
+          source_index: typeof payload.source_index === 'number' ? payload.source_index : undefined,
+        },
+        sequence_no: Date.now(),
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    },
+    [roomId, syncUserId, viewerContentId, viewerContentType]
+  );
+
+  useEffect(() => {
+    if (!roomId || !syncUserId) {
+      roomSyncRef.current = null;
+      return;
+    }
+
+    let disposed = false;
+    const sync = startWatchRoomRealtime({
+      roomId,
+      userId: syncUserId,
+      username: syncUsername || 'User',
+      avatar: syncAvatar || '',
+      onPlaybackEvent: (event) => {
+        if (disposed) return;
+        if (event.actor_id === syncUserId) return;
+        if (event.media_id && viewerContentId && event.media_id !== viewerContentId) return;
+
+        const video = videoRef.current;
+        if (!video) return;
+
+        suppressRoomBroadcastRef.current = true;
+        lastRoomEventKeyRef.current = event.id;
+
+        try {
+          if (event.event_type === 'pause') {
+            video.pause();
+            return;
+          }
+
+          if (event.event_type === 'play') {
+            void video.play().catch(() => undefined);
+            return;
+          }
+
+          if (event.event_type === 'seek') {
+            const nextTime = Number(event.position_ms || event.payload?.position_ms || 0) / 1000;
+            if (Number.isFinite(nextTime)) {
+              video.currentTime = Math.max(0, nextTime);
+            }
+            return;
+          }
+
+          if (event.event_type === 'source_change') {
+            const sourceIndex = Number(event.payload?.source_index);
+            if (Number.isFinite(sourceIndex) && sourceIndex >= 0 && sourceIndex < sources.length) {
+              onSelectSource(sourceIndex);
+            }
+          }
+        } finally {
+          setTimeout(() => {
+            suppressRoomBroadcastRef.current = false;
+          }, 0);
+        }
+      },
+    });
+
+    roomSyncRef.current = sync;
+
+    return () => {
+      disposed = true;
+      roomSyncRef.current = null;
+      void sync.cleanup().catch(() => undefined);
+    };
+  }, [roomId, syncUserId, syncUsername, syncAvatar, viewerContentId, onSelectSource, sources.length, pushRoomEvent]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -554,6 +665,10 @@ function WebDirectPlayer({
     const onPlay = () => {
       setIsPlaying(true);
       scheduleControlsHide(2200);
+      void pushRoomEvent('play', {
+        position_ms: Math.round((video.currentTime || 0) * 1000),
+        playback_rate: video.playbackRate || 1,
+      });
     };
 
     const onPlaying = () => {
@@ -571,6 +686,10 @@ function WebDirectPlayer({
     const onPause = () => {
       setIsPlaying(false);
       setShowControls(true);
+      void pushRoomEvent('pause', {
+        position_ms: Math.round((video.currentTime || 0) * 1000),
+        playback_rate: video.playbackRate || 1,
+      });
     };
 
     const onWaiting = () => setIsBuffering(true);
@@ -579,6 +698,10 @@ function WebDirectPlayer({
     const onSeeked = () => {
       setIsBuffering(false);
       scheduleControlsHide(2200);
+      void pushRoomEvent('seek', {
+        position_ms: Math.round((video.currentTime || 0) * 1000),
+        playback_rate: video.playbackRate || 1,
+      });
     };
 
     const onError = () => {
@@ -637,6 +760,7 @@ function WebDirectPlayer({
     onPlaybackSuccess,
     onProgress,
     activeSource?.inspection,
+    pushRoomEvent,
   ]);
 
   useEffect(() => {
@@ -960,6 +1084,10 @@ function WebDirectPlayer({
                 activeIndex={selectedSourceIndex}
                 onSelect={(index) => {
                   onSelectSource(index);
+                  void pushRoomEvent('source_change', {
+                    source_index: index,
+                    position_ms: Math.round((videoRef.current?.currentTime || 0) * 1000),
+                  });
                   setShowSourcesPanel(false);
                 }}
               />
@@ -1047,6 +1175,12 @@ function NativeDirectVideoPlayer({
   mediaKind,
   subtitleUrl,
   initialResumeTime = 0,
+  roomId = '',
+  viewerContentId = '',
+  viewerContentType,
+  syncUserId = null,
+  syncUsername = null,
+  syncAvatar = null,
 }: {
   url: string;
   title: string;
@@ -1059,6 +1193,12 @@ function NativeDirectVideoPlayer({
   mediaKind: MediaKind;
   subtitleUrl?: string;
   initialResumeTime?: number;
+  roomId?: string;
+  viewerContentId?: string;
+  viewerContentType?: api.ViewerContentType;
+  syncUserId?: string | null;
+  syncUsername?: string | null;
+  syncAvatar?: string | null;
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -1074,11 +1214,37 @@ function NativeDirectVideoPlayer({
 
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoViewRef = useRef<any>(null);
+  const roomSyncRef = useRef<ReturnType<typeof startWatchRoomRealtime> | null>(null);
+  const suppressRoomBroadcastRef = useRef(false);
 
   const scheduleControlsHide = useCallback((delay = 2500) => {
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
     controlsTimer.current = setTimeout(() => setShowControls(false), delay);
   }, []);
+
+  const pushRoomEvent = useCallback(
+    async (eventType: RoomPlaybackEvent['event_type'], payload: Record<string, any> = {}) => {
+      if (!roomId || !syncUserId || suppressRoomBroadcastRef.current) return;
+      const sync = roomSyncRef.current;
+      if (!sync) return;
+
+      await sync.sendPlaybackEvent({
+        id: `native_${eventType}_${Date.now()}`,
+        room_id: roomId,
+        actor_id: syncUserId,
+        event_type: eventType,
+        media_id: viewerContentId || null,
+        media_type: viewerContentType || null,
+        position_ms: typeof payload.position_ms === 'number' ? payload.position_ms : undefined,
+        playback_rate: typeof payload.playback_rate === 'number' ? payload.playback_rate : undefined,
+        payload,
+        sequence_no: Date.now(),
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    },
+    [roomId, syncUserId, viewerContentId, viewerContentType]
+  );
 
   const toggleFullscreen = useCallback(() => {
     Haptics.selectionAsync();
@@ -1089,6 +1255,63 @@ function NativeDirectVideoPlayer({
     instance.loop = false;
     instance.play();
   });
+
+  useEffect(() => {
+    if (!roomId || !syncUserId) {
+      roomSyncRef.current = null;
+      return;
+    }
+
+    let disposed = false;
+    const sync = startWatchRoomRealtime({
+      roomId,
+      userId: syncUserId,
+      username: syncUsername || 'User',
+      avatar: syncAvatar || '',
+      onPlaybackEvent: (event) => {
+        if (disposed) return;
+        if (event.actor_id === syncUserId) return;
+        if (event.media_id && viewerContentId && event.media_id !== viewerContentId) return;
+
+        suppressRoomBroadcastRef.current = true;
+        try {
+          if (event.event_type === 'pause') {
+            player.pause();
+            return;
+          }
+          if (event.event_type === 'play') {
+            player.play();
+            return;
+          }
+          if (event.event_type === 'seek') {
+            const nextTime = Number(event.position_ms || event.payload?.position_ms || 0) / 1000;
+            if (Number.isFinite(nextTime)) {
+              player.currentTime = Math.max(0, nextTime);
+            }
+            return;
+          }
+          if (event.event_type === 'source_change') {
+            const sourceIndex = Number(event.payload?.source_index);
+            if (Number.isFinite(sourceIndex) && sourceIndex >= 0 && sourceIndex < sources.length) {
+              onSelectSource(sourceIndex);
+            }
+          }
+        } finally {
+          setTimeout(() => {
+            suppressRoomBroadcastRef.current = false;
+          }, 0);
+        }
+      },
+    });
+
+    roomSyncRef.current = sync;
+
+    return () => {
+      disposed = true;
+      roomSyncRef.current = null;
+      void sync.cleanup().catch(() => undefined);
+    };
+  }, [roomId, syncUserId, syncUsername, syncAvatar, viewerContentId, onSelectSource, sources.length, player, pushRoomEvent]);
 
   useEffect(() => {
     if (!initialResumeTime || initialResumeTime <= 5) return;
@@ -1145,16 +1368,28 @@ function NativeDirectVideoPlayer({
     Haptics.selectionAsync();
     if (isPlaying) {
       player.pause();
+      void pushRoomEvent('pause', {
+        position_ms: Math.round((player.currentTime || 0) * 1000),
+        playback_rate: player.playbackRate || 1,
+      });
       return;
     }
     player.play();
-  }, [player, isPlaying]);
+    void pushRoomEvent('play', {
+      position_ms: Math.round((player.currentTime || 0) * 1000),
+      playback_rate: player.playbackRate || 1,
+    });
+  }, [player, isPlaying, pushRoomEvent]);
 
   const seek = useCallback((seconds: number) => {
     Haptics.selectionAsync();
     const newTime = Math.max(0, Math.min((player.currentTime || 0) + seconds, player.duration || 0));
     player.currentTime = newTime;
-  }, [player]);
+    void pushRoomEvent('seek', {
+      position_ms: Math.round(newTime * 1000),
+      playback_rate: player.playbackRate || 1,
+    });
+  }, [player, pushRoomEvent]);
 
   const changeSpeed = useCallback((speed: number) => {
     Haptics.selectionAsync();
@@ -1339,6 +1574,10 @@ function NativeDirectVideoPlayer({
                 activeIndex={selectedSourceIndex}
                 onSelect={(index) => {
                   onSelectSource(index);
+                  void pushRoomEvent('source_change', {
+                    source_index: index,
+                    position_ms: Math.round((player.currentTime || 0) * 1000),
+                  });
                   setShowSourcesPanel(false);
                 }}
               />
@@ -1389,6 +1628,12 @@ function DirectVideoPlayer(props: {
   mediaKind: MediaKind;
   subtitleUrl?: string;
   initialResumeTime?: number;
+  roomId?: string;
+  viewerContentId?: string;
+  viewerContentType?: api.ViewerContentType;
+  syncUserId?: string | null;
+  syncUsername?: string | null;
+  syncAvatar?: string | null;
 }) {
   if (Platform.OS === 'web') return <WebDirectPlayer {...props} />;
   return <NativeDirectVideoPlayer {...props} />;
@@ -1663,13 +1908,14 @@ export default function PlayerScreenWrapper() {
 
 function PlayerScreen() {
   const { user } = useAuth();
-  const { url, title, sources, subtitleUrl, viewerContentId, viewerContentType, initialResumeTime } = useLocalSearchParams<{
+  const { url, title, sources, subtitleUrl, viewerContentId, viewerContentType, roomId, initialResumeTime } = useLocalSearchParams<{
     url?: string;
     title?: string;
     sources?: string;
     subtitleUrl?: string;
     viewerContentId?: string;
     viewerContentType?: api.ViewerContentType;
+    roomId?: string;
     initialResumeTime?: string;
   }>();
 
@@ -1697,6 +1943,7 @@ function PlayerScreen() {
   const safeTitle = title || 'Now Playing';
   const parsedInitialResumeTime = Number(initialResumeTime || 0);
   const resumeStartTime = Number.isFinite(parsedInitialResumeTime) && parsedInitialResumeTime > 0 ? parsedInitialResumeTime : 0;
+  const resolvedRoomId = String(roomId || '').trim();
   const preferenceKey = `player-preference:${viewerContentType || 'unknown'}:${viewerContentId || safeTitle}`;
   const sourceHealthMeta = getSourceHealthMeta(activeSource);
   const sourceIndicatorLabel = [activeSource?.addon || activeSource?.server || activeSource?.label, activeSource?.quality || null]
@@ -2102,6 +2349,12 @@ function PlayerScreen() {
           mediaKind={mediaKind}
           subtitleUrl={subtitleUrl}
           initialResumeTime={resumeStartTime}
+          roomId={resolvedRoomId}
+          viewerContentId={viewerContentId}
+          viewerContentType={viewerContentType}
+          syncUserId={user?.id}
+          syncUsername={user?.username || user?.email || 'User'}
+          syncAvatar={(user as any)?.avatar || null}
           key={`${resolvedUrl}:${selectedSourceIndex}:${retryToken}`}
         />
     );

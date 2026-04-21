@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, Pressable, TextInput, StyleSheet, Dimensions, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,6 +13,7 @@ import * as api from '../services/api';
 import type { WatchRoom, RoomMessage, StreamSource } from '../services/api';
 import { useAppContext } from '../contexts/AppContext';
 import { useLocale } from '../contexts/LocaleContext';
+import { startWatchRoomRealtime, type WatchRoomRealtimeStatus, type RoomPresenceMember, type RoomPlaybackEvent } from '../services/watchroomRealtime';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -42,7 +43,16 @@ export default function WatchRoomScreen() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [roomName, setRoomName] = useState('');
+  const [realtimeStatus, setRealtimeStatus] = useState<WatchRoomRealtimeStatus>('idle');
+  const [roomPresence, setRoomPresence] = useState<RoomPresenceMember[]>([]);
+  const [roomRoles, setRoomRoles] = useState<api.RoomRole[]>([]);
+  const [roomBans, setRoomBans] = useState<any[]>([]);
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [recentReactions, setRecentReactions] = useState<{ emoji: string; username: string; id: string }[]>([]);
   const chatScrollRef = useRef<ScrollView>(null);
+  const realtimeRef = useRef<ReturnType<typeof startWatchRoomRealtime> | null>(null);
+  const realtimeStatusRef = useRef<WatchRoomRealtimeStatus>('idle');
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomId = selectedRoom?.id;
 
   const copy = language === 'Arabic'
@@ -123,12 +133,21 @@ export default function WatchRoomScreen() {
         roomUpdatedDesc: 'The room now points to the latest selected content.',
       };
 
+  const realtimeStatusLabel: Record<WatchRoomRealtimeStatus, string> = {
+    idle: 'Idle',
+    connecting: 'Connecting',
+    connected: 'Live',
+    reconnecting: 'Reconnecting',
+    error: 'Fallback',
+    disconnected: 'Offline',
+  };
+
   const getPlayerParams = (
     sources: StreamSource[],
     fallbackUrl: string,
     title: string,
     subtitleUrl?: string,
-    viewer?: { viewerContentId: string; viewerContentType: api.ViewerContentType }
+    viewer?: { viewerContentId: string; viewerContentType: api.ViewerContentType; roomId?: string }
   ) => ({
     title,
     url: fallbackUrl,
@@ -136,6 +155,7 @@ export default function WatchRoomScreen() {
     subtitleUrl: subtitleUrl || '',
     viewerContentId: viewer?.viewerContentId || '',
     viewerContentType: viewer?.viewerContentType || ('movie' as const),
+    roomId: viewer?.roomId || '',
   });
 
   const selectedContent = contentId && contentType && contentTitle && contentPoster
@@ -150,25 +170,265 @@ export default function WatchRoomScreen() {
     setLoading(false);
   }, []);
 
+  const mergeMessages = useCallback((nextMessage: RoomMessage) => {
+    setMessages((prev) => {
+      const map = new Map(prev.map((message) => [message.id, message] as const));
+      map.set(nextMessage.id, nextMessage);
+      return Array.from(map.values()).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    });
+  }, []);
+
+  const applyRoomContentPayload = useCallback((payload?: Record<string, any> | null) => {
+    if (!payload || typeof payload !== 'object') return;
+    setSelectedRoom((current) => (current ? {
+      ...current,
+      content_id: String(payload.content_id || current.content_id),
+      content_type: (payload.content_type as WatchRoom['content_type']) || current.content_type,
+      content_title: String(payload.content_title || current.content_title),
+      content_poster: String(payload.content_poster || current.content_poster),
+      stream_url: String(payload.stream_url || current.stream_url || ''),
+      stream_sources: Array.isArray(payload.stream_sources) ? payload.stream_sources : current.stream_sources,
+      subtitle_url: String(payload.subtitle_url || current.subtitle_url || ''),
+      source_label: String(payload.source_label || current.source_label || ''),
+    } : current));
+  }, []);
+
+  const currentUserRole = useMemo(() => {
+    if (!selectedRoom || !user?.id) return 'member';
+    if (isAdmin || selectedRoom.host_id === user.id) return 'host';
+    const explicitRole = roomRoles.find((role) => role.user_id === user.id)?.role;
+    const presenceRole = roomPresence.find((member) => member.userId === user.id)?.role;
+    return explicitRole || presenceRole || 'member';
+  }, [isAdmin, roomPresence, roomRoles, selectedRoom, user?.id]);
+
+  const canModerateRoom = currentUserRole === 'host' || currentUserRole === 'co-host' || currentUserRole === 'moderator' || isAdmin;
+  const canChangeContent = currentUserRole === 'host' || currentUserRole === 'co-host' || isAdmin;
+
+  useEffect(() => {
+    if (!selectedRoom || !user?.id) return;
+
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    if (!chatMessage.trim()) {
+      void realtimeRef.current?.sendControlEvent({
+        id: `typing_off_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'typing',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { isTyping: false },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+      return;
+    }
+
+    void realtimeRef.current?.sendControlEvent({
+      id: `typing_on_${Date.now()}`,
+      room_id: selectedRoom.id,
+      actor_id: user.id,
+      event_type: 'typing',
+      media_id: null,
+      media_type: null,
+      position_ms: 0,
+      playback_rate: 1,
+      payload: { isTyping: true, username: user.username || user.email || 'User' },
+      sequence_no: 0,
+      server_ts: new Date().toISOString(),
+      client_ts: new Date().toISOString(),
+    });
+
+    typingTimerRef.current = setTimeout(() => {
+      void realtimeRef.current?.sendControlEvent({
+        id: `typing_stop_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'typing',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { isTyping: false },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    }, 1200);
+
+    return () => {
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    };
+  }, [chatMessage, selectedRoom, user?.id, user?.email, user?.username]);
+
+  useEffect(() => {
+    realtimeStatusRef.current = realtimeStatus;
+  }, [realtimeStatus]);
+
   useEffect(() => { loadRooms(); }, [loadRooms]);
 
   useEffect(() => {
-    if (!joinedRoom || !roomId) return;
-    const loadMessages = async () => {
+    if (realtimeRef.current) {
+      void realtimeRef.current.cleanup().catch(() => undefined);
+      realtimeRef.current = null;
+    }
+
+    if (!joinedRoom || !roomId || !user?.id) {
+      setRealtimeStatus('idle');
+      setRoomPresence([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadInitialMessages = async () => {
       try {
         const msgs = await api.fetchRoomMessages(roomId);
-        setMessages(msgs);
-      } catch {}
+        if (!cancelled) {
+          setMessages(msgs);
+        }
+      } catch {
+        if (!cancelled) {
+          setMessages([]);
+        }
+      }
     };
-    loadMessages();
-    const interval = setInterval(loadMessages, 3000);
-    return () => clearInterval(interval);
-  }, [joinedRoom, roomId]);
+
+    void loadInitialMessages();
+    void api.fetchRoomRoles(roomId).then((roles) => {
+      if (!cancelled) setRoomRoles(roles);
+    }).catch(() => undefined);
+    void api.fetchRoomPresence(roomId).then((presence) => {
+      if (!cancelled) {
+        setRoomPresence(
+          presence.map((entry) => ({
+            userId: entry.user_id,
+            username: entry.user?.username || 'User',
+            avatar: entry.user?.avatar || null,
+            role: entry.role,
+            joinedAt: entry.joined_at,
+            lastSeenAt: entry.last_seen_at,
+          }))
+        );
+      }
+    }).catch(() => undefined);
+    void api.fetchRoomBans(roomId).then((bans) => {
+      if (!cancelled) setRoomBans(bans);
+    }).catch(() => undefined);
+    void api.fetchRoomEvents(roomId).then((events) => {
+      const lastContentChange = [...events].reverse().find((event) => event.event_type === 'content_change');
+      if (!lastContentChange || !lastContentChange.payload || typeof lastContentChange.payload !== 'object' || cancelled) return;
+      setSelectedRoom((current) => (current ? {
+        ...current,
+        content_id: String(lastContentChange.payload.content_id || current.content_id),
+        content_type: (lastContentChange.payload.content_type as WatchRoom['content_type']) || current.content_type,
+        content_title: String(lastContentChange.payload.content_title || current.content_title),
+        content_poster: String(lastContentChange.payload.content_poster || current.content_poster),
+        stream_url: String(lastContentChange.payload.stream_url || current.stream_url || ''),
+        stream_sources: Array.isArray(lastContentChange.payload.stream_sources) ? lastContentChange.payload.stream_sources : current.stream_sources,
+        subtitle_url: String(lastContentChange.payload.subtitle_url || current.subtitle_url || ''),
+        source_label: String(lastContentChange.payload.source_label || current.source_label || ''),
+      } : current));
+    }).catch(() => undefined);
+    const realtime = startWatchRoomRealtime({
+      roomId,
+      userId: user.id,
+      username: user.username || user.email || 'User',
+      avatar: (user as any)?.avatar || null,
+      onStatus: setRealtimeStatus,
+      onMessage: (message) => mergeMessages(message),
+      onRoomUpdate: (room) => {
+        setSelectedRoom((current) => (current?.id === room.id ? { ...current, ...room } : current));
+      },
+      onPresence: setRoomPresence,
+      onPlaybackEvent: (event) => {
+        if (event.event_type === 'content_change') {
+          applyRoomContentPayload(event.payload);
+        }
+        if (event.event_type === 'join' || event.event_type === 'leave') {
+          void api.fetchRoomPresence(roomId).then((presence) => {
+            if (!cancelled) {
+              setRoomPresence(
+                presence.map((entry) => ({
+                  userId: entry.user_id,
+                  username: entry.user?.username || 'User',
+                  avatar: entry.user?.avatar || null,
+                  role: entry.role,
+                  joinedAt: entry.joined_at,
+                  lastSeenAt: entry.last_seen_at,
+                }))
+              );
+            }
+          }).catch(() => undefined);
+        }
+        if (event.event_type === 'reaction') {
+          const emoji = String(event.payload?.emoji || '🎉');
+          const username = String(event.payload?.username || 'User');
+          const reactionId = `${event.id}_${Date.now()}`;
+          setRecentReactions((current) => [{ emoji, username, id: reactionId }, ...current].slice(0, 6));
+          setTimeout(() => {
+            setRecentReactions((current) => current.filter((item) => item.id !== reactionId));
+          }, 2200);
+        }
+      },
+      onControlEvent: (event) => {
+        if (event.event_type === 'content_change') {
+          applyRoomContentPayload(event.payload);
+        }
+        if (event.event_type === 'typing') {
+          const username = String(event.payload?.username || 'User');
+          const isTyping = Boolean(event.payload?.isTyping);
+          setTypingUsers((current) => {
+            const next = new Set(current);
+            if (isTyping) next.add(username);
+            else next.delete(username);
+            return Array.from(next).slice(0, 4);
+          });
+        }
+        if (event.event_type === 'reaction') {
+          const emoji = String(event.payload?.emoji || '🎉');
+          const username = String(event.payload?.username || 'User');
+          const reactionId = `${event.id}_${Date.now()}`;
+          setRecentReactions((current) => [{ emoji, username, id: reactionId }, ...current].slice(0, 6));
+          setTimeout(() => {
+            setRecentReactions((current) => current.filter((item) => item.id !== reactionId));
+          }, 2200);
+        }
+      },
+    });
+
+    realtimeRef.current = realtime;
+
+    const fallbackInterval = setInterval(() => {
+      if (realtimeStatusRef.current !== 'connected') {
+        void api.fetchRoomMessages(roomId).then((msgs) => {
+          if (!cancelled) {
+            setMessages(msgs);
+          }
+        }).catch(() => undefined);
+      }
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(fallbackInterval);
+      void realtime.cleanup().catch(() => undefined);
+      if (realtimeRef.current === realtime) {
+        realtimeRef.current = null;
+      }
+    };
+  }, [joinedRoom, roomId, user, mergeMessages, applyRoomContentPayload]);
 
   const handleJoinRoom = async (room: WatchRoom) => {
     if (!user?.id) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     try {
+      const activeBan = roomBans.find((ban) => ban.room_id === room.id && ban.user_id === user.id);
+      if (activeBan) {
+        showAlert(copy.error, 'You are banned from this room.');
+        return;
+      }
       await api.joinWatchRoom(room.id, user.id);
       setSelectedRoom(room);
       setJoinedRoom(true);
@@ -180,9 +440,19 @@ export default function WatchRoomScreen() {
   const handleLeaveRoom = async () => {
     if (!user?.id || !selectedRoom) return;
     try { await api.leaveWatchRoom(selectedRoom.id, user.id); } catch {}
+    if (realtimeRef.current) {
+      await realtimeRef.current.cleanup().catch(() => undefined);
+      realtimeRef.current = null;
+    }
     setJoinedRoom(false);
     setSelectedRoom(null);
     setMessages([]);
+    setRoomPresence([]);
+    setRoomRoles([]);
+    setRoomBans([]);
+    setTypingUsers([]);
+    setRecentReactions([]);
+    setRealtimeStatus('idle');
     loadRooms();
   };
 
@@ -193,16 +463,26 @@ export default function WatchRoomScreen() {
         text: copy.delete,
         style: 'destructive',
         onPress: async () => {
-          try {
-            await api.closeWatchRoom(room.id);
-            if (selectedRoom?.id === room.id) {
-              setJoinedRoom(false);
-              setSelectedRoom(null);
-              setMessages([]);
-            }
-            await loadRooms();
-            showAlert(copy.deleted, copy.deletedDesc);
-          } catch (err: any) {
+            try {
+              await api.closeWatchRoom(room.id);
+              if (selectedRoom?.id === room.id) {
+                setJoinedRoom(false);
+                setSelectedRoom(null);
+                setMessages([]);
+                setRoomPresence([]);
+                setRoomRoles([]);
+                setRoomBans([]);
+                setTypingUsers([]);
+                setRecentReactions([]);
+                setRealtimeStatus('idle');
+                if (realtimeRef.current) {
+                  await realtimeRef.current.cleanup().catch(() => undefined);
+                  realtimeRef.current = null;
+                }
+              }
+              await loadRooms();
+              showAlert(copy.deleted, copy.deletedDesc);
+            } catch (err: any) {
             showAlert(copy.error, err.message || copy.error);
           }
         },
@@ -215,7 +495,7 @@ export default function WatchRoomScreen() {
     Haptics.selectionAsync();
     try {
       const msg = await api.sendRoomMessage(selectedRoom.id, user.id, chatMessage.trim());
-      setMessages(prev => [...prev, msg]);
+      mergeMessages(msg);
       setChatMessage('');
       setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {}
@@ -317,6 +597,7 @@ export default function WatchRoomScreen() {
           ...getPlayerParams(sources, url, selectedRoom.content_title, subtitleUrl, {
             viewerContentId,
             viewerContentType,
+            roomId: selectedRoom.id,
           }),
         },
       });
@@ -343,6 +624,50 @@ export default function WatchRoomScreen() {
         source_label: playback.sourceLabel,
       });
       setSelectedRoom(updatedRoom);
+      await api.appendRoomEvent({
+        room_id: selectedRoom.id,
+        actor_id: user?.id || selectedRoom.host_id,
+        event_type: 'content_change',
+        media_id: selectedContent.id,
+        media_type: selectedContent.type === 'movie' ? 'movie' : 'episode',
+        position_ms: 0,
+        playback_rate: 1,
+        payload: {
+          content_id: selectedContent.id,
+          content_type: selectedContent.type,
+          content_title: selectedContent.title,
+          content_poster: selectedContent.poster,
+          stream_url: playback.url,
+          stream_sources: playback.sources,
+          subtitle_url: playback.subtitleUrl,
+          source_label: playback.sourceLabel,
+        },
+        idempotency_key: `content_change:${selectedRoom.id}:${selectedContent.id}:${Date.now()}`,
+      }).catch(() => null);
+      const controlEvent: RoomPlaybackEvent = {
+        id: `event_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user?.id || selectedRoom.host_id,
+        event_type: 'content_change',
+        media_id: selectedContent.id,
+        media_type: selectedContent.type === 'movie' ? 'movie' : 'episode',
+        position_ms: 0,
+        playback_rate: 1,
+        payload: {
+          content_id: selectedContent.id,
+          content_type: selectedContent.type,
+          content_title: selectedContent.title,
+          content_poster: selectedContent.poster,
+          stream_url: playback.url,
+          stream_sources: playback.sources,
+          subtitle_url: playback.subtitleUrl,
+          source_label: playback.sourceLabel,
+        },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      };
+      await realtimeRef.current?.sendControlEvent(controlEvent);
       showAlert(copy.roomUpdated, copy.roomUpdatedDesc);
     } catch (err: any) {
       showAlert(copy.error, err.message || copy.playbackError);
@@ -360,7 +685,9 @@ export default function WatchRoomScreen() {
                 <Text style={styles.roomHeaderTitle} numberOfLines={1}>{selectedRoom.name}</Text>
                 <View style={[styles.roomHeaderMeta, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                   <View style={styles.roomLiveDot} />
-                  <Text style={styles.roomHeaderSub}>{copy.room}: {selectedRoom.room_code}</Text>
+                  <Text style={styles.roomHeaderSub}>
+                    {copy.room}: {selectedRoom.room_code} • {roomPresence.length} online • {realtimeStatusLabel[realtimeStatus]}
+                  </Text>
                 </View>
               </View>
               {(isAdmin || selectedRoom.host_id === user?.id) ? (
@@ -382,7 +709,13 @@ export default function WatchRoomScreen() {
                 <MaterialIcons name="admin-panel-settings" size={14} color={theme.accent} />
                 <Text style={styles.hostBadgeText}>{copy.host}: {selectedRoom.host?.username || copy.unknown}</Text>
               </View>
-              {(selectedContent && (isAdmin || selectedRoom.host_id === user?.id) && selectedContent.id !== selectedRoom.content_id) ? (
+              <View style={[styles.roleBadge, canModerateRoom ? styles.roleBadgePower : styles.roleBadgeMember]}>
+                <MaterialIcons name={canModerateRoom ? 'verified-user' : 'person'} size={12} color="#FFF" />
+                <Text style={styles.roleBadgeText}>
+                  {currentUserRole === 'host' ? 'Host' : currentUserRole === 'co-host' ? 'Co-host' : currentUserRole === 'moderator' ? 'Moderator' : 'Member'}
+                </Text>
+              </View>
+              {(selectedContent && canChangeContent && selectedContent.id !== selectedRoom.content_id) ? (
                 <Pressable style={styles.updateRoomContentBtn} onPress={handleApplySelectedContentToRoom}>
                   <MaterialIcons name="swap-horiz" size={16} color="#FFF" />
                   <Text style={styles.updateRoomContentText}>{copy.updateRoomContent}</Text>
@@ -391,12 +724,56 @@ export default function WatchRoomScreen() {
             </View>
 
             <View style={styles.reactionsRow}>
-              {['👏', '😂', '🔥', '❤️', '😮', '🎉'].map(emoji => (
-                <Pressable key={emoji} style={styles.reactionBtn} onPress={() => Haptics.selectionAsync()}>
+              {['👏', '😂', '🔥', '❤️', '😮', '🎉'].map((emoji) => (
+                <Pressable
+                  key={emoji}
+                  style={styles.reactionBtn}
+                  onPress={async () => {
+                    Haptics.selectionAsync();
+                    if (!selectedRoom || !user?.id) return;
+                    setRecentReactions((current) => [{ emoji, username: user.username || user.email || 'User', id: `${emoji}_${Date.now()}` }, ...current].slice(0, 6));
+                    try {
+                      await realtimeRef.current?.sendControlEvent({
+                        id: `reaction_${Date.now()}`,
+                        room_id: selectedRoom.id,
+                        actor_id: user.id,
+                        event_type: 'reaction',
+                        media_id: null,
+                        media_type: null,
+                        position_ms: 0,
+                        playback_rate: 1,
+                        payload: { emoji, username: user.username || user.email || 'User' },
+                        sequence_no: 0,
+                        server_ts: new Date().toISOString(),
+                        client_ts: new Date().toISOString(),
+                      });
+                    } catch {}
+                  }}
+                >
                   <Text style={styles.reactionEmoji}>{emoji}</Text>
                 </Pressable>
               ))}
             </View>
+
+            {typingUsers.length > 0 ? (
+              <View style={styles.typingBar}>
+                <MaterialIcons name="keyboard" size={14} color={theme.textSecondary} />
+                <Text style={styles.typingText}>
+                  {typingUsers.slice(0, 2).join(', ')} {typingUsers.length > 1 ? 'are' : 'is'} typing...
+                </Text>
+              </View>
+            ) : null}
+
+            {recentReactions.length > 0 ? (
+              <View style={styles.recentReactionBar}>
+                {recentReactions.map((reaction) => (
+                  <View key={reaction.id} style={styles.recentReactionPill}>
+                    <Text style={styles.recentReactionEmoji}>{reaction.emoji}</Text>
+                    <Text style={styles.recentReactionText}>{reaction.username}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             <View style={styles.chatContainer}>
               <ScrollView ref={chatScrollRef} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 12 }} showsVerticalScrollIndicator={false}>
@@ -557,6 +934,10 @@ const styles = StyleSheet.create({
   videoBigPlayBtn: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
   hostBadge: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   hostBadgeText: { fontSize: 11, fontWeight: '600', color: '#FFF' },
+  roleBadge: { position: 'absolute', top: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.08)' },
+  roleBadgePower: { backgroundColor: 'rgba(59,130,246,0.88)' },
+  roleBadgeMember: { backgroundColor: 'rgba(75,85,99,0.88)' },
+  roleBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
   updateRoomContentBtn: {
     position: 'absolute',
     right: 12,
@@ -573,6 +954,12 @@ const styles = StyleSheet.create({
   reactionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.border },
   reactionBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.surface, alignItems: 'center', justifyContent: 'center' },
   reactionEmoji: { fontSize: 20 },
+  typingBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, backgroundColor: 'rgba(255,255,255,0.03)' },
+  typingText: { fontSize: 12, color: theme.textSecondary, fontWeight: '600' },
+  recentReactionBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', paddingHorizontal: 12, paddingBottom: 8 },
+  recentReactionPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(99,102,241,0.16)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  recentReactionEmoji: { fontSize: 14 },
+  recentReactionText: { fontSize: 11, color: '#FFF', fontWeight: '700' },
   chatContainer: { flex: 1, backgroundColor: theme.backgroundSecondary },
   chatMsg: { gap: 10 },
   chatAvatarFallback: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center' },
