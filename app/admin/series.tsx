@@ -21,7 +21,7 @@ const emptySeriesForm = {
 export default function AdminSeries() {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
-  const { language, isRTL, direction } = useLocale();
+  const { language, direction } = useLocale();
   const [seriesList, setSeriesList] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');

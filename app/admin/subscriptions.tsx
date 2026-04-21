@@ -7,6 +7,7 @@ import { useAlert } from '@/template';
 import { theme } from '../../constants/theme';
 import * as subscriptions from '../../services/subscriptions';
 import type { SubscriptionCode } from '../../services/subscriptions';
+import { recordAdminActivity } from '../../services/adminActivity';
 
 export default function SubscriptionsAdmin() {
   const insets = useSafeAreaInsets();
@@ -33,6 +34,14 @@ export default function SubscriptionsAdmin() {
     }
   };
 
+  const logActivity = async (title: string, detail: string, level: 'info' | 'success' | 'warning' | 'error') => {
+    try {
+      await recordAdminActivity({ title, detail, level });
+    } catch {
+      // Activity logging should never break code management.
+    }
+  };
+
   useEffect(() => {
     void load();
   }, []);
@@ -46,6 +55,7 @@ export default function SubscriptionsAdmin() {
         maxUses: Number(maxUses) || 1,
       });
       await load();
+      void logActivity('Subscription code created', `${code.code} (${code.label}) was created.`, 'success');
       showAlert('Subscription code created', code.code);
     } catch (error: any) {
       showAlert('Create failed', error?.message || 'Could not create code.');
@@ -57,6 +67,7 @@ export default function SubscriptionsAdmin() {
   const setStatus = async (code: SubscriptionCode, status: SubscriptionCode['status']) => {
     await subscriptions.updateSubscriptionCode(code.id, { status });
     await load();
+    void logActivity('Subscription status updated', `${code.code} set to ${status}.`, status === 'active' ? 'success' : 'warning');
   };
 
   const removeCode = (code: SubscriptionCode) => {
@@ -68,6 +79,7 @@ export default function SubscriptionsAdmin() {
         onPress: async () => {
           await subscriptions.deleteSubscriptionCode(code.id);
           await load();
+          void logActivity('Subscription code deleted', `${code.code} was removed.`, 'warning');
         },
       },
     ]);

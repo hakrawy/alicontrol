@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
+import { View, Text, Pressable, TextInput, StyleSheet, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -15,22 +15,25 @@ import { useLocale } from '../../contexts/LocaleContext';
 import { buildContentRoute } from '../../services/navigation';
 import { CinematicBackdrop, SkeletonGrid } from '../../components/CinematicUI';
 import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
+import { useAuth, useAlert } from '@/template';
 
-type SearchFilter = 'all' | 'movie' | 'series' | 'channel';
+type SearchFilter = 'all' | 'favorite' | 'movie' | 'series' | 'channel';
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ q?: string }>();
   const { language, isRTL, direction } = useLocale();
-  const { allMovies, allSeries, channels } = useAppContext();
+  const { allMovies, allSeries, channels, isFavorite, addToFavorites, removeFromFavorites } = useAppContext();
+  const { user } = useAuth();
+  const { showAlert } = useAlert();
   const perf = useAdaptivePerformance();
   const [query, setQuery] = useState(typeof params.q === 'string' ? params.q : '');
   const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
   const [activeGenre, setActiveGenre] = useState<string | null>(null);
   const [results, setResults] = useState<api.SearchResultItem[]>([]);
   const [searching, setSearching] = useState(false);
-  const { width } = (require('react-native') as any).useWindowDimensions();
+  const { width } = useWindowDimensions();
   const gridColumns = width > 1200 ? 5 : width > 900 ? 4 : width > 680 ? 3 : 2;
   const copy = language === 'Arabic'
     ? {
@@ -85,7 +88,11 @@ export default function SearchScreen() {
 
   const visibleItems = useMemo(() => {
     let items = query.trim().length >= 2 ? results : localItems;
-    if (activeFilter !== 'all') items = items.filter((item: any) => item.type === activeFilter);
+    if (activeFilter === 'favorite') {
+      items = items.filter((item: any) => item.type !== 'channel' && isFavorite(item.id));
+    } else if (activeFilter !== 'all') {
+      items = items.filter((item: any) => item.type === activeFilter);
+    }
     if (activeGenre) {
       items = items.filter((item: any) => {
         if (item.type === 'channel') return String(item.category || '').toLowerCase() === activeGenre.toLowerCase();
@@ -93,7 +100,7 @@ export default function SearchScreen() {
       });
     }
     return items;
-  }, [query, results, localItems, activeFilter, activeGenre]);
+  }, [query, results, localItems, activeFilter, activeGenre, isFavorite]);
 
   const openItem = (item: api.SearchResultItem) => {
     Haptics.selectionAsync();
@@ -117,6 +124,22 @@ export default function SearchScreen() {
   const posterUri = (item: api.SearchResultItem) => item.type === 'channel' ? item.logo : item.poster;
   const subtitle = (item: api.SearchResultItem) => item.type === 'channel' ? String(item.category || copy.live).toUpperCase() : (item.genre?.[0] || copy.featured);
 
+  const toggleFavorite = async (item: api.SearchResultItem) => {
+    if (item.type === 'channel') return;
+    if (!user?.id) {
+      showAlert('Sign in required', 'Sign in to save favorites.');
+      return;
+    }
+
+    Haptics.selectionAsync();
+    if (isFavorite(item.id)) {
+      await removeFromFavorites(item.id);
+      return;
+    }
+
+    await addToFavorites(item.id, item.type);
+  };
+
   return (
     <CinematicBackdrop>
     <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: 'transparent', direction }]}>
@@ -139,6 +162,7 @@ export default function SearchScreen() {
       <View style={styles.chipRow}>
         {[
           { key: 'all', label: copy.all },
+          { key: 'favorite', label: 'Favorites' },
           { key: 'movie', label: copy.movie },
           { key: 'series', label: copy.series },
           { key: 'channel', label: copy.channel },
@@ -174,6 +198,22 @@ export default function SearchScreen() {
                     <View style={styles.posterWrap}>
                       <Image source={{ uri: posterUri(item) }} style={styles.poster} contentFit={item.type === 'channel' ? 'contain' : 'cover'} transition={perf.imageTransition} />
                       {item.type !== 'channel' && (item as any).is_new ? <View style={styles.newBadge}><Text style={styles.newBadgeText}>{copy.new}</Text></View> : null}
+                      {item.type !== 'channel' ? (
+                        <Pressable
+                          style={[styles.favoriteBtn, isFavorite(item.id) && styles.favoriteBtnActive]}
+                          hitSlop={10}
+                          onPress={(event) => {
+                            event?.stopPropagation?.();
+                            void toggleFavorite(item);
+                          }}
+                        >
+                          <MaterialIcons
+                            name={isFavorite(item.id) ? 'favorite' : 'favorite-border'}
+                            size={16}
+                            color={isFavorite(item.id) ? '#FFF' : theme.textPrimary}
+                          />
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View style={styles.cardInfo}>
                       <Text style={styles.cardTitle} numberOfLines={1}>{item.type === 'channel' ? item.name : item.title}</Text>
@@ -224,6 +264,8 @@ const styles = StyleSheet.create({
   posterWrap: { width: '100%', aspectRatio: 2 / 3, backgroundColor: theme.surfaceLight },
   poster: { width: '100%', height: '100%' },
   newBadge: { position: 'absolute', top: 6, left: 6, backgroundColor: theme.primary, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
+  favoriteBtn: { position: 'absolute', top: 6, right: 6, width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(10,10,15,0.7)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
+  favoriteBtnActive: { backgroundColor: theme.accent, borderColor: theme.accent },
   newBadgeText: { color: '#FFF', fontSize: 9, fontWeight: '800' },
   cardInfo: { padding: 12, gap: 4 },
   cardTitle: { color: '#FFF', fontSize: 13, fontWeight: '700' },

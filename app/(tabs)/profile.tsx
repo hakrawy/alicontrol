@@ -10,6 +10,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import { useAppContext } from '../../contexts/AppContext';
 import { getPreferences } from '../../services/preferences';
+import { clearSubscriptionSession, getSubscriptionSession, type SubscriptionSession } from '../../services/subscriptions';
 import { useLocale } from '../../contexts/LocaleContext';
 import { localizePreferenceValue } from '../../constants/i18n';
 
@@ -25,6 +26,7 @@ export default function ProfileScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [preferenceMeta, setPreferenceMeta] = useState({ language: 'English', videoQuality: 'Auto' });
   const [profileMeta, setProfileMeta] = useState({ username: '', display_name: '', avatar: '' });
+  const [subscriptionSession, setSubscriptionSession] = useState<SubscriptionSession | null>(null);
 
   const loadProfileMeta = useCallback(async () => {
     if (!user?.id) {
@@ -62,10 +64,16 @@ export default function ProfileScreen() {
     });
   }, []);
 
+  const loadSubscriptionSession = useCallback(async () => {
+    const session = await getSubscriptionSession().catch(() => null);
+    setSubscriptionSession(session);
+  }, []);
+
   useFocusEffect(useCallback(() => {
     void loadProfileMeta();
     void loadPreferenceMeta();
-  }, [loadPreferenceMeta, loadProfileMeta]));
+    void loadSubscriptionSession();
+  }, [loadPreferenceMeta, loadProfileMeta, loadSubscriptionSession]));
 
   const settingsGroups = useMemo<{ title: string; items: SettingsItem[] }[]>(() => [
     {
@@ -110,6 +118,21 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const handleClearSubscription = () => {
+    showAlert('Subscription', 'Remove the active subscription session from this device?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          await clearSubscriptionSession();
+          setSubscriptionSession(null);
+          showAlert('Subscription', 'Subscription session cleared.');
+        },
+      },
+    ]);
+  };
+
   const displayName = profileMeta.display_name || profileMeta.username || user?.username || user?.email?.split('@')[0] || 'User';
   const avatarLetter = (displayName?.[0] || user?.email?.[0] || 'U').toUpperCase();
 
@@ -151,8 +174,49 @@ export default function ProfileScreen() {
           <View style={styles.statCard}><Text style={styles.statValue}>{watchHistory.length}</Text><Text style={styles.statLabel}>{t('profile.watched')}</Text></View>
         </Animated.View>
 
+        <Animated.View entering={FadeInDown.delay(180).duration(400)} style={styles.subscriptionCard}>
+          <View style={styles.subscriptionHeader}>
+            <View style={styles.subscriptionBadge}>
+              <MaterialIcons name="vpn-key" size={16} color="#D1FAE5" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.subscriptionTitle}>Subscription Access</Text>
+              <Text style={styles.subscriptionSubtitle}>
+                {subscriptionSession ? 'This device is validated with a subscription key.' : 'No active subscription session on this device.'}
+              </Text>
+            </View>
+            <View style={[styles.subscriptionStatus, subscriptionSession ? styles.subscriptionStatusActive : styles.subscriptionStatusIdle]}>
+              <Text style={styles.subscriptionStatusText}>{subscriptionSession ? 'Active' : 'Idle'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.subscriptionGrid}>
+            <View style={styles.subscriptionMetric}>
+              <Text style={styles.subscriptionMetricLabel}>Code</Text>
+              <Text style={styles.subscriptionMetricValue}>{subscriptionSession?.code || '—'}</Text>
+            </View>
+            <View style={styles.subscriptionMetric}>
+              <Text style={styles.subscriptionMetricLabel}>Subscription ID</Text>
+              <Text style={styles.subscriptionMetricValue}>{subscriptionSession?.subscriptionId || '—'}</Text>
+            </View>
+            <View style={styles.subscriptionMetric}>
+              <Text style={styles.subscriptionMetricLabel}>Expires</Text>
+              <Text style={styles.subscriptionMetricValue}>
+                {subscriptionSession?.expiresAt ? new Date(subscriptionSession.expiresAt).toLocaleString() : 'No expiry'}
+              </Text>
+            </View>
+          </View>
+
+          {subscriptionSession ? (
+            <Pressable style={styles.subscriptionActionBtn} onPress={handleClearSubscription}>
+              <MaterialIcons name="logout" size={16} color="#FFF" />
+              <Text style={styles.subscriptionActionText}>Clear Subscription</Text>
+            </Pressable>
+          ) : null}
+        </Animated.View>
+
         {settingsGroups.map((group, gi) => (
-          <Animated.View key={group.title} entering={FadeInDown.delay(200 + gi * 80).duration(400)} style={styles.settingsGroup}>
+          <Animated.View key={group.title} entering={FadeInDown.delay(260 + gi * 80).duration(400)} style={styles.settingsGroup}>
             <Text style={styles.groupTitle}>{group.title}</Text>
             <View style={styles.groupCard}>
               {group.items.map((item, index) => (
@@ -204,6 +268,21 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 24, fontWeight: '700', color: '#FFF' },
   statLabel: { fontSize: 12, fontWeight: '500', color: theme.textSecondary },
   statDivider: { width: 1, height: 36, backgroundColor: theme.border },
+  subscriptionCard: { marginHorizontal: 16, marginBottom: 24, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(16,185,129,0.22)', backgroundColor: 'rgba(16,185,129,0.08)', padding: 14, gap: 12 },
+  subscriptionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  subscriptionBadge: { width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(16,185,129,0.2)', alignItems: 'center', justifyContent: 'center' },
+  subscriptionTitle: { color: '#FFF', fontSize: 16, fontWeight: '900' },
+  subscriptionSubtitle: { color: theme.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 2 },
+  subscriptionStatus: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  subscriptionStatusActive: { backgroundColor: 'rgba(16,185,129,0.18)' },
+  subscriptionStatusIdle: { backgroundColor: 'rgba(148,163,184,0.14)' },
+  subscriptionStatusText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  subscriptionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  subscriptionMetric: { flex: 1, minWidth: 150, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.04)', padding: 12, gap: 4 },
+  subscriptionMetricLabel: { color: theme.textMuted, fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+  subscriptionMetricValue: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+  subscriptionActionBtn: { minHeight: 44, borderRadius: 14, backgroundColor: 'rgba(239,68,68,0.14)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.28)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  subscriptionActionText: { color: '#FEE2E2', fontSize: 13, fontWeight: '800' },
   settingsGroup: { paddingHorizontal: 16, marginBottom: 24 },
   groupTitle: { fontSize: 11, fontWeight: '700', color: theme.textMuted, letterSpacing: 1, marginBottom: 10, paddingLeft: 4 },
   groupCard: { backgroundColor: theme.surface, borderRadius: 14, borderWidth: 1, borderColor: theme.border, overflow: 'hidden' },

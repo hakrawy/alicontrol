@@ -26,14 +26,14 @@ import type {
   ExternalImportSourceRecord,
 } from '../../services/externalImport';
 
-const providerOptions: Array<{ value: ExternalImportProvider; label: string; icon: keyof typeof MaterialIcons.glyphMap }> = [
+const providerOptions: { value: ExternalImportProvider; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
   { value: 'fgcode', label: 'FGCode', icon: 'api' },
   { value: 'ostora', label: 'الأسطورة TV', icon: 'live-tv' },
   { value: 'custom', label: 'Custom URL', icon: 'link' },
   { value: 'playlist', label: 'ملف تشغيل', icon: 'playlist-play' },
 ];
 
-const typeOptions: Array<{ value: ExternalContentType; label: string; icon: keyof typeof MaterialIcons.glyphMap }> = [
+const typeOptions: { value: ExternalContentType; label: string; icon: keyof typeof MaterialIcons.glyphMap }[] = [
   { value: 'channel', label: 'قناة', icon: 'live-tv' },
   { value: 'movie', label: 'فيلم', icon: 'movie' },
   { value: 'series', label: 'مسلسل', icon: 'tv' },

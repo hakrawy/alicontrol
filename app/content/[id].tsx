@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Share, ActivityIndicator, Linking, Platform } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Share, ActivityIndicator, Linking, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +16,6 @@ import PlaybackSourceSheet from '../../components/PlaybackSourceSheet';
 import { PremiumLoader } from '../../components/PremiumLoader';
 import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BACKDROP_HEIGHT = 380;
 
 function parsePreviewContent(rawValue?: string): ContentItem | null {
@@ -77,7 +76,7 @@ export default function ContentDetailScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
-  const { addToFavorites, removeFromFavorites, isFavorite } = useAppContext();
+  const { addToFavorites, removeFromFavorites, isFavorite, watchHistory } = useAppContext();
   const perf = useAdaptivePerformance();
   const previewContent = parsePreviewContent(typeof preview === 'string' ? preview : undefined);
   const [content, setContent] = useState<ContentItem | null>(previewContent);
@@ -208,6 +207,28 @@ export default function ContentDetailScreen() {
     }
   }, [normalizedSeasons.length, selectedSeason]);
 
+  const selectedEpisode = useMemo(() => {
+    if (!content || content.type === 'movie') return null;
+    return normalizedSeasons[selectedSeason]?.episodes?.[0] || null;
+  }, [content, normalizedSeasons, selectedSeason]);
+
+  const resumeHistory = useMemo(() => {
+    if (!content) return null;
+    if (content.type === 'movie') {
+      return watchHistory.find((entry) => entry.content_id === content.id && entry.content_type === 'movie') || null;
+    }
+
+    if (!selectedEpisode) return null;
+    return watchHistory.find((entry) => entry.content_id === selectedEpisode.id && entry.content_type === 'episode') || null;
+  }, [content, selectedEpisode, watchHistory]);
+
+  const resumeTime = useMemo(() => {
+    if (!resumeHistory || resumeHistory.duration <= 0 || resumeHistory.progress <= 0) return 0;
+    const ratio = resumeHistory.progress / resumeHistory.duration;
+    if (!Number.isFinite(ratio) || ratio >= 0.95) return 0;
+    return Math.max(0, Math.min(resumeHistory.progress, Math.max(resumeHistory.duration - 3, 0)));
+  }, [resumeHistory]);
+
   if (loading) {
     return <View style={styles.container}><PremiumLoader hint="Building an immersive detail page" /></View>;
   }
@@ -259,13 +280,14 @@ export default function ContentDetailScreen() {
     fallbackUrl: string,
     playerTitle: string,
     subtitleUrl?: string,
-    viewerParams?: { viewerContentId: string; viewerContentType: api.ViewerContentType }
+    viewerParams?: { viewerContentId: string; viewerContentType: api.ViewerContentType; initialResumeTime?: number }
   ) => ({
     title: playerTitle,
     url: fallbackUrl,
     sources: JSON.stringify(sources),
     subtitleUrl: subtitleUrl || '',
     ...(viewerParams || {}),
+    initialResumeTime: viewerParams?.initialResumeTime ? String(Math.max(0, Math.floor(viewerParams.initialResumeTime))) : '',
   });
 
   const addonOptions = Array.from(new Set(playbackSources.map((source) => source.addon || 'Direct')));
@@ -307,46 +329,6 @@ export default function ContentDetailScreen() {
     )
   );
 
-  const openSourcePicker = (sources: StreamSource[]) => {
-    if (sources.length === 0) {
-      showAlert('No sources available', 'No playable sources were found for this title yet.');
-      return;
-    }
-
-    if (sources.length === 1) {
-      const only = sources[0];
-      router.push({
-        pathname: '/player',
-        params: getPlayerParams(sources, only.url, content.title, isMovie ? movieData.subtitle_url : undefined, isMovie
-          ? { viewerContentId: content.id, viewerContentType: 'movie' }
-          : { viewerContentId: content.id, viewerContentType: 'series' }),
-      });
-      return;
-    }
-
-    const defaultAddon = sources[0].addon || 'Direct';
-    const defaultServer = sources.find((source) => (source.addon || 'Direct') === defaultAddon)?.server || sources[0].label;
-    const defaultQuality = sources.find((source) => (source.addon || 'Direct') === defaultAddon && (source.server || source.label) === defaultServer)?.quality || 'Auto';
-    const defaultLanguage = sources.find((source) =>
-      (source.addon || 'Direct') === defaultAddon &&
-      (source.server || source.label) === defaultServer &&
-      (source.quality || 'Auto') === defaultQuality
-    )?.language || 'Unknown';
-    const defaultSubtitle = sources.find((source) =>
-      (source.addon || 'Direct') === defaultAddon &&
-      (source.server || source.label) === defaultServer &&
-      (source.quality || 'Auto') === defaultQuality &&
-      (source.language || 'Unknown') === defaultLanguage
-    )?.subtitle || 'None';
-    setPlaybackSources(sources);
-    setSelectedAddon(defaultAddon);
-    setSelectedServer(defaultServer);
-    setSelectedQuality(defaultQuality);
-    setSelectedLanguage(defaultLanguage);
-    setSelectedSubtitle(defaultSubtitle);
-    setSourcePickerOpen(true);
-  };
-
   const playSelectedSource = () => {
     const filteredSources = playbackSources.filter((source) =>
       (source.addon || 'Direct') === selectedAddon &&
@@ -370,13 +352,13 @@ export default function ContentDetailScreen() {
         content.title,
         activeSource.subtitle || (isMovie ? movieData.subtitle_url : undefined),
         isMovie
-          ? { viewerContentId: content.id, viewerContentType: 'movie' }
-          : { viewerContentId: content.id, viewerContentType: 'series' }
+          ? { viewerContentId: content.id, viewerContentType: 'movie', initialResumeTime: resumeTime }
+          : { viewerContentId: content.id, viewerContentType: 'series', initialResumeTime: resumeTime }
       ),
     });
   };
 
-  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null; season_number?: number; episode_number?: number } }) => {
+  const loadPlayableSources = async (target: { contentType: 'movie' | 'series' | 'episode'; contentId: string; fallbackSources: StreamSource[]; fallbackUrl?: string; subtitleUrl?: string; title: string; viewerContentType: api.ViewerContentType; viewerContentId: string; identity?: { id?: string; imdb_id?: string | null; tmdb_id?: string | null; title?: string; year?: number | null; season_number?: number; episode_number?: number }; initialResumeTime?: number }) => {
     setSourcesLoading(true);
     try {
       const addonSources = await api.fetchPlaybackSourcesForContent(target.contentType, target.contentId, target.identity).catch(() => []);
@@ -396,6 +378,7 @@ export default function ContentDetailScreen() {
           params: getPlayerParams(combinedSources, combinedSources[0].url, target.title, target.subtitleUrl, {
             viewerContentId: target.viewerContentId,
             viewerContentType: target.viewerContentType,
+            initialResumeTime: target.initialResumeTime,
           }),
         });
         return;
@@ -436,6 +419,7 @@ export default function ContentDetailScreen() {
       title: content.title,
       viewerContentId: content.id,
       viewerContentType: isMovie ? 'movie' : 'series',
+      initialResumeTime: resumeTime,
       identity: isMovie
         ? { id: movieData.id, imdb_id: movieData.imdb_id, tmdb_id: movieData.tmdb_id, title: movieData.title, year: movieData.year }
         : selectedEpisode
@@ -456,6 +440,14 @@ export default function ContentDetailScreen() {
       title: `${content.title} - ${epTitle}`,
       viewerContentId: content.id,
       viewerContentType: 'series',
+      initialResumeTime: (() => {
+        const episodeId = selectedEpisode?.id || content.id;
+        const historyEntry = watchHistory.find((entry) => entry.content_id === episodeId && entry.content_type === 'episode');
+        if (!historyEntry || historyEntry.duration <= 0 || historyEntry.progress <= 0) return 0;
+        const ratio = historyEntry.progress / historyEntry.duration;
+        if (!Number.isFinite(ratio) || ratio >= 0.95) return 0;
+        return Math.max(0, Math.min(historyEntry.progress, Math.max(historyEntry.duration - 3, 0)));
+      })(),
       identity: selectedEpisode ? { id: selectedEpisode.id, imdb_id: content.imdb_id as any, tmdb_id: content.tmdb_id as any, title: epTitle, year: seriesData.year, season_number: normalizedSeasons.find(s => (s.episodes||[]).some(e => e.id === selectedEpisode.id))?.number, episode_number: selectedEpisode.number } : { id: content.id, title: epTitle, year: seriesData.year },
     });
   };

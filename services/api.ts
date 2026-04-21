@@ -1,7 +1,55 @@
 import { getSupabaseClient } from '@/template';
 import { importM3U as importM3UEdge } from '@/src/lib/edgeFunctions';
+import { fetchJsonWithRetry, fetchTextWithRetry, fetchWithTimeout, getErrorMessage } from './http';
 
 const supabase = getSupabaseClient();
+
+async function readSupabaseRows<T>(
+  query: PromiseLike<{ data: T[] | null; error: any }>,
+  fallback: T[] = [],
+  context = 'Supabase query failed.'
+) {
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(getErrorMessage(error, context));
+  }
+
+  return (data ?? fallback) as T[];
+}
+
+async function readSupabaseRow<T>(
+  query: PromiseLike<{ data: T | null; error: any }>,
+  context = 'Supabase query failed.'
+) {
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(getErrorMessage(error, context));
+  }
+
+  return data as T;
+}
+
+async function writeSupabaseMutation(
+  query: PromiseLike<{ error: any }>,
+  context = 'Supabase mutation failed.'
+) {
+  const { error } = await query;
+  if (error) {
+    throw new Error(getErrorMessage(error, context));
+  }
+}
+
+async function writeSupabaseRow<T>(
+  query: PromiseLike<{ data: T | null; error: any }>,
+  context = 'Supabase mutation failed.'
+) {
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(getErrorMessage(error, context));
+  }
+
+  return data as T;
+}
 
 // ===== TYPES =====
 export interface StreamSource {
@@ -625,16 +673,6 @@ const ADDON_STREAM_TIMEOUT_MS = 8000;
 const ADDON_STREAM_CACHE_TTL_MS = 5 * 60 * 1000;
 const addonStreamCache = new Map<string, { expiresAt: number; sources: StreamSource[] }>();
 
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = STREAM_VALIDATION_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function looksLikeDirectMediaUrl(url: string) {
   return /\.(m3u8|mp4|m4v|mov|webm|mpd)(\?.*)?$/i.test(url);
 }
@@ -1043,9 +1081,12 @@ export async function testAddonManifest(manifestUrl: string) {
 }
 
 export async function fetchAllAddons() {
-  const { data, error } = await supabase.from('addons').select('*').order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data || []).map((row: any) => normalizeAddonRecord(row));
+  const rows = await readSupabaseRows<any>(
+    supabase.from('addons').select('*').order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch addons.'
+  );
+  return rows.map((row) => normalizeAddonRecord(row));
 }
 
 export async function saveAddonManifest(manifestUrl: string) {
@@ -1068,16 +1109,20 @@ export async function saveAddonManifest(manifestUrl: string) {
     enabled: true,
   };
 
-  const { data, error } = await supabase.from('addons').upsert(payload, { onConflict: 'manifest_url' }).select().single();
-  if (error) throw error;
+  const data = await writeSupabaseRow<any>(
+    supabase.from('addons').upsert(payload, { onConflict: 'manifest_url' }).select().single(),
+    'Failed to save addon manifest.'
+  );
   return normalizeAddonRecord(data);
 }
 
 export async function updateAddon(addonId: string, updates: Partial<AddonRecord>) {
   const payload: Record<string, any> = { ...updates, updated_at: new Date().toISOString() };
   delete payload.id;
-  const { data, error } = await supabase.from('addons').update(payload).eq('id', addonId).select().single();
-  if (error) throw error;
+  const data = await writeSupabaseRow<any>(
+    supabase.from('addons').update(payload).eq('id', addonId).select().single(),
+    'Failed to update addon.'
+  );
   return normalizeAddonRecord(data);
 }
 
@@ -1086,8 +1131,7 @@ export async function saveAddonConfig(addonId: string, configValues: Record<stri
 }
 
 export async function deleteAddon(addonId: string) {
-  const { error } = await supabase.from('addons').delete().eq('id', addonId);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('addons').delete().eq('id', addonId), 'Failed to delete addon.');
 }
 
 function inferM3UContentKind(entry: M3UEntry): 'channel' | 'movie' | 'series' {
@@ -1236,10 +1280,12 @@ async function upsertExternalRef(input: Omit<AddonExternalRef, 'id'>) {
     year: input.year || null,
     meta_json: input.meta_json || null,
   };
-  const { error } = await supabase.from('content_external_refs').upsert(payload, {
-    onConflict: 'addon_id,content_type,external_id',
-  });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('content_external_refs').upsert(payload, {
+      onConflict: 'addon_id,content_type,external_id',
+    }),
+    'Failed to save imported reference.'
+  );
 }
 
 async function fetchAddonCatalogItems(addon: AddonRecord, catalog: AddonCatalog) {
@@ -1514,8 +1560,10 @@ async function ensureSeriesEpisode(addon: AddonRecord, seriesId: string, externa
 }
 
 export async function repairAddonSeriesEpisodes(addonId: string) {
-  const { data, error } = await supabase.from('addons').select('*').eq('id', addonId).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(
+    supabase.from('addons').select('*').eq('id', addonId).single(),
+    'Failed to load addon.'
+  );
 
   const addon = normalizeAddonRecord(data);
   const summary: AddonRepairSummary = {
@@ -1794,38 +1842,80 @@ async function findExistingContentByIdentity(
   const identity = buildContentLookupVariants(input);
 
   if (identity.imdbId) {
-    const { data } = await supabase.from(table).select('*').eq('imdb_id', identity.imdbId).limit(1).maybeSingle();
+    const data = await readSupabaseRow<any | null>(
+      supabase.from(table).select('*').eq('imdb_id', identity.imdbId).limit(1).maybeSingle(),
+      'Failed to load existing content.'
+    );
     if (data) return data;
   }
 
   if (identity.tmdbId) {
-    const { data } = await supabase.from(table).select('*').eq('tmdb_id', identity.tmdbId).limit(1).maybeSingle();
+    const data = await readSupabaseRow<any | null>(
+      supabase.from(table).select('*').eq('tmdb_id', identity.tmdbId).limit(1).maybeSingle(),
+      'Failed to load existing content.'
+    );
     if (data) return data;
   }
 
   if (identity.normalizedTitle) {
-    const { data } = await supabase.from(table).select('*').ilike('title', identity.normalizedTitle).limit(10);
-    const match = (data || []).find((row: any) => row?.title?.trim().toLowerCase() === identity.normalizedTitle && (!identity.year || !row?.year || row.year === identity.year));
+    const data = await readSupabaseRows<any>(
+      supabase.from(table).select('*').ilike('title', identity.normalizedTitle).limit(10),
+      [],
+      'Failed to load existing content.'
+    );
+    const match = data.find((row) => row?.title?.trim().toLowerCase() === identity.normalizedTitle && (!identity.year || !row?.year || row.year === identity.year));
     if (match) return match;
   }
 
   return null;
 }
 
+async function findExistingChannelByIdentity(input: { name: string; streamUrl: string; category?: string | null }) {
+  const normalizedName = String(input.name || '').trim().toLowerCase();
+  const normalizedStreamUrl = String(input.streamUrl || '').trim();
+  const normalizedCategory = String(input.category || '').trim().toLowerCase();
+
+  if (normalizedStreamUrl) {
+    const matchedByUrl = await readSupabaseRow<any | null>(
+      supabase.from('channels').select('*').eq('stream_url', normalizedStreamUrl).maybeSingle(),
+      'Failed to load existing channel.'
+    );
+    if (matchedByUrl) return matchedByUrl;
+  }
+
+  if (normalizedName) {
+    const candidates = await readSupabaseRows<any>(
+      supabase.from('channels').select('*').ilike('name', normalizedName).limit(10),
+      [],
+      'Failed to load existing channel.'
+    );
+    const matchedByName = candidates.find((row) => {
+      const rowName = String(row?.name || '').trim().toLowerCase();
+      const rowCategory = String(row?.category || '').trim().toLowerCase();
+      return rowName === normalizedName && (!normalizedCategory || !rowCategory || rowCategory === normalizedCategory);
+    });
+    if (matchedByName) return matchedByName;
+  }
+
+  return null;
+}
+
 export async function fetchPlaybackSourceRecords(contentType: 'movie' | 'series' | 'episode' | 'channel', contentId: string) {
-  const { data, error } = await supabase
-    .from('playback_sources')
-    .select('*')
-    .eq('content_type', contentType)
-    .eq('content_id', contentId)
-    .order('updated_at', { ascending: false });
-  if (error) throw error;
-  return (data || []).map((row: any) => normalizePlaybackSourceRecord(row));
+  const rows = await readSupabaseRows<any>(
+    supabase
+      .from('playback_sources')
+      .select('*')
+      .eq('content_type', contentType)
+      .eq('content_id', contentId)
+      .order('updated_at', { ascending: false }),
+    [],
+    'Failed to fetch playback sources.'
+  );
+  return rows.map((row) => normalizePlaybackSourceRecord(row));
 }
 
 export async function deletePlaybackSourceRecord(id: string) {
-  const { error } = await supabase.from('playback_sources').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('playback_sources').delete().eq('id', id), 'Failed to delete playback source.');
 }
 
 export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceRecord>) {
@@ -1852,15 +1942,19 @@ export async function upsertPlaybackSourceRecord(source: Partial<PlaybackSourceR
   };
 
   if (source.id) {
-    const { data, error } = await supabase.from('playback_sources').update(payload).eq('id', source.id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('playback_sources').update(payload).eq('id', source.id).select().single(),
+      'Failed to update playback source.'
+    );
     return normalizePlaybackSourceRecord(data);
   }
 
-  const { data, error } = await supabase.from('playback_sources').upsert(payload, {
-    onConflict: 'content_type,content_id,stream_url',
-  }).select().single();
-  if (error) throw error;
+  const data = await writeSupabaseRow<any>(
+    supabase.from('playback_sources').upsert(payload, {
+      onConflict: 'content_type,content_id,stream_url',
+    }).select().single(),
+    'Failed to save playback source.'
+  );
   return normalizePlaybackSourceRecord(data);
 }
 
@@ -1870,13 +1964,16 @@ export async function syncManualPlaybackSourcesForContent(
   sources: StreamSource[],
   providerName = 'Manual'
 ) {
-  const { data, error } = await supabase
-    .from('playback_sources')
-    .select('*')
-    .eq('content_type', contentType)
-    .eq('content_id', contentId)
-    .in('source_origin', ['manual', 'form']);
-  if (error) throw error;
+  const data = await readSupabaseRows<any>(
+    supabase
+      .from('playback_sources')
+      .select('*')
+      .eq('content_type', contentType)
+      .eq('content_id', contentId)
+      .in('source_origin', ['manual', 'form']),
+    [],
+    'Failed to fetch playback sources.'
+  );
 
   const normalizedSources = uniqueSources(
     sources
@@ -1888,7 +1985,7 @@ export async function syncManualPlaybackSourcesForContent(
       }))
   );
 
-  const existingRows = (data || []).map((row: any) => normalizePlaybackSourceRecord(row));
+  const existingRows = data.map((row: any) => normalizePlaybackSourceRecord(row));
   const nextUrls = new Set(normalizedSources.map((source) => source.url));
 
   await Promise.all(
@@ -1940,7 +2037,7 @@ export async function validatePlaybackSourceUrl(streamUrl: string, headers?: Rec
 
   const startedAt = Date.now();
   try {
-    const response = await fetch(streamUrl, { method: 'GET', redirect: 'follow', headers });
+    const response = await fetchWithTimeout(streamUrl, { method: 'GET', redirect: 'follow', headers }, STREAM_VALIDATION_TIMEOUT_MS);
     const checkedAt = new Date().toISOString();
     const responseTimeMs = Date.now() - startedAt;
     if (!response.ok) {
@@ -1960,10 +2057,10 @@ export async function validatePlaybackSourceUrl(streamUrl: string, headers?: Rec
       responseTimeMs,
       streamType: contentType.includes('mpegurl') ? 'hls' : inferStreamTypeFromUrl(streamUrl),
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       status: 'failing' as const,
-      message: error?.message || 'Request failed',
+      message: getErrorMessage(error, 'Request failed'),
       checkedAt: new Date().toISOString(),
       responseTimeMs: null,
       streamType: inferStreamTypeFromUrl(streamUrl),
@@ -1972,8 +2069,10 @@ export async function validatePlaybackSourceUrl(streamUrl: string, headers?: Rec
 }
 
 export async function validatePlaybackSourceRecord(id: string) {
-  const { data, error } = await supabase.from('playback_sources').select('*').eq('id', id).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(
+    supabase.from('playback_sources').select('*').eq('id', id).single(),
+    'Failed to load playback source.'
+  );
   const result = await validatePlaybackSourceUrl(data.stream_url, data.headers || undefined);
   return upsertPlaybackSourceRecord({
     id,
@@ -2007,11 +2106,7 @@ function parseCsvObjects(rawInput: string) {
 }
 
 async function fetchStructuredInputFromUrl(url: string) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Import request failed with status ${response.status}`);
-  }
-  return response.text();
+  return fetchTextWithRetry(url, {}, 10000, 2);
 }
 
 export async function fetchCinemetaMetadataByImdbId(imdbId: string, contentType: 'movie' | 'series') {
@@ -2020,12 +2115,7 @@ export async function fetchCinemetaMetadataByImdbId(imdbId: string, contentType:
     throw new Error('IMDb ID must look like tt1234567.');
   }
 
-  const response = await fetch(`https://v3-cinemeta.strem.io/meta/${contentType}/${safeId}.json`);
-  if (!response.ok) {
-    throw new Error(`Metadata request failed with status ${response.status}`);
-  }
-
-  const payload = await response.json();
+  const payload = await fetchJsonWithRetry<{ meta?: any }>(`https://v3-cinemeta.strem.io/meta/${contentType}/${safeId}.json`, {}, 12000, 2);
   const meta = payload?.meta;
   if (!meta) {
     throw new Error('No metadata was returned for this IMDb ID.');
@@ -2352,12 +2442,14 @@ export function createViewerSessionId() {
 
 export async function fetchActiveViewerCounts() {
   const cutoff = new Date(Date.now() - 90 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('active_viewer_sessions')
-    .select('content_id,content_type')
-    .gte('last_seen', cutoff);
-
-  if (error) throw error;
+  const data = await readSupabaseRows<{ content_id: string; content_type: ViewerContentType }>(
+    supabase
+      .from('active_viewer_sessions')
+      .select('content_id,content_type')
+      .gte('last_seen', cutoff),
+    [],
+    'Failed to fetch active viewer counts.'
+  );
 
   const counts: Record<ViewerContentType, Record<string, number>> = {
     movie: {},
@@ -2389,31 +2481,36 @@ export async function startViewerSession(input: {
     last_seen: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from('active_viewer_sessions').upsert(payload, {
-    onConflict: 'session_id',
-  });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('active_viewer_sessions').upsert(payload, {
+      onConflict: 'session_id',
+    }),
+    'Failed to start viewer session.'
+  );
 }
 
 export async function heartbeatViewerSession(sessionId: string) {
-  const { error } = await supabase
-    .from('active_viewer_sessions')
-    .update({ last_seen: new Date().toISOString() })
-    .eq('session_id', sessionId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('active_viewer_sessions').update({ last_seen: new Date().toISOString() }).eq('session_id', sessionId),
+    'Failed to heartbeat viewer session.'
+  );
 }
 
 export async function endViewerSession(sessionId: string) {
-  const { error } = await supabase.from('active_viewer_sessions').delete().eq('session_id', sessionId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('active_viewer_sessions').delete().eq('session_id', sessionId),
+    'Failed to end viewer session.'
+  );
 }
 
 export async function incrementContentView(contentId: string, contentType: ViewerContentType) {
-  const { error } = await supabase.rpc('increment_content_view', {
-    target_id: contentId,
-    target_type: contentType,
-  });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.rpc('increment_content_view', {
+      target_id: contentId,
+      target_type: contentType,
+    }),
+    'Failed to increment content view.'
+  );
 }
 
 // ===== MOVIES =====
@@ -2424,14 +2521,12 @@ export async function fetchMovies(opts?: { featured?: boolean; trending?: boolea
   if (opts?.isNew) query = query.eq('is_new', true);
   if (opts?.limit) query = query.limit(opts.limit);
   query = query.order('view_count', { ascending: false });
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []).map((m: any) => normalizeMovie(m));
+  const rows = await readSupabaseRows<any>(query, [], 'Failed to fetch movies.');
+  return rows.map((m) => normalizeMovie(m));
 }
 
 export async function fetchMovieById(id: string) {
-  const { data, error } = await supabase.from('movies').select('*').eq('id', id).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(supabase.from('movies').select('*').eq('id', id).single(), 'Failed to fetch movie.');
   return normalizeMovie(data);
 }
 
@@ -2443,41 +2538,41 @@ export async function fetchSeries(opts?: { featured?: boolean; trending?: boolea
   if (opts?.isNew) query = query.eq('is_new', true);
   if (opts?.limit) query = query.limit(opts.limit);
   query = query.order('view_count', { ascending: false });
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []).map((s: any) => normalizeSeries(s));
+  const rows = await readSupabaseRows<any>(query, [], 'Failed to fetch series.');
+  return rows.map((s) => normalizeSeries(s));
 }
 
 export async function fetchSeriesById(id: string) {
-  const { data, error } = await supabase.from('series').select('*').eq('id', id).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(supabase.from('series').select('*').eq('id', id).single(), 'Failed to fetch series item.');
   return normalizeSeries(data);
 }
 
 export async function fetchSeasonsWithEpisodes(seriesId: string) {
-  const { data: seasons, error: sErr } = await supabase
-    .from('seasons')
-    .select('*')
-    .eq('series_id', seriesId)
-    .order('number');
-  if (sErr) throw sErr;
-  const { data: episodes, error: eErr } = await supabase
-    .from('episodes')
-    .select('*')
-    .eq('series_id', seriesId)
-    .order('number');
-  if (eErr) throw eErr;
-  return (seasons || [])
-    .slice()
-    .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
-    .map((s: any) => ({
-      ...s,
-      episodes: (episodes || [])
-        .filter((e: any) => e.season_id === s.id)
-        .slice()
-        .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
-        .map((e: any) => normalizeEpisode(e)),
-    })) as Season[];
+  const [seasons, episodes] = await Promise.all([
+    readSupabaseRows<any>(
+      supabase.from('seasons').select('*').eq('series_id', seriesId).order('number'),
+      [],
+      'Failed to load seasons.'
+    ),
+    readSupabaseRows<any>(
+      supabase.from('episodes').select('*').eq('series_id', seriesId).order('number'),
+      [],
+      'Failed to load episodes.'
+    ),
+  ]);
+  const sortedSeasons = [...seasons].sort((a: any, b: any) => (a.number || 0) - (b.number || 0));
+  return sortedSeasons.map((season: any) => {
+    const seasonEpisodes = episodes
+      .filter((episode: any) => episode.season_id === season.id)
+      .slice()
+      .sort((a: any, b: any) => (a.number || 0) - (b.number || 0))
+      .map((episode: any) => normalizeEpisode(episode));
+
+    return {
+      ...season,
+      episodes: seasonEpisodes,
+    };
+  }) as Season[];
 }
 
 // ===== CONTENT (COMBINED) =====
@@ -2487,9 +2582,15 @@ export async function fetchAllContent() {
 }
 
 export async function fetchContentById(id: string): Promise<ContentItem | null> {
-  const { data: movie } = await supabase.from('movies').select('*').eq('id', id).maybeSingle();
+  const movie = await readSupabaseRow<any | null>(
+    supabase.from('movies').select('*').eq('id', id).maybeSingle(),
+    'Failed to fetch content.'
+  );
   if (movie) return normalizeMovie(movie);
-  const { data: seriesItem } = await supabase.from('series').select('*').eq('id', id).maybeSingle();
+  const seriesItem = await readSupabaseRow<any | null>(
+    supabase.from('series').select('*').eq('id', id).maybeSingle(),
+    'Failed to fetch content.'
+  );
   if (seriesItem) return normalizeSeries(seriesItem);
   return null;
 }
@@ -2573,77 +2674,96 @@ export async function searchCatalog(query: string): Promise<SearchResultItem[]> 
 export async function fetchChannels(category?: string) {
   let query = supabase.from('channels').select('*').order('sort_order');
   if (category && category !== 'all') query = query.eq('category', category);
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []).map((channel: any) => normalizeChannel(channel));
+  const rows = await readSupabaseRows<any>(query, [], 'Failed to fetch channels.');
+  return rows.map((channel) => normalizeChannel(channel));
 }
 
 export async function fetchChannelById(id: string) {
-  const { data, error } = await supabase.from('channels').select('*').eq('id', id).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(supabase.from('channels').select('*').eq('id', id).single(), 'Failed to fetch channel.');
   return normalizeChannel(data);
 }
 
 // ===== BANNERS =====
 export async function fetchBanners() {
-  const { data, error } = await supabase.from('banners').select('*').eq('is_active', true).order('sort_order');
-  if (error) throw error;
-  return (data || []) as Banner[];
+  return readSupabaseRows<Banner>(
+    supabase.from('banners').select('*').eq('is_active', true).order('sort_order'),
+    [],
+    'Failed to fetch banners.'
+  );
 }
 
 export async function fetchAllBannersAdmin() {
-  const { data, error } = await supabase.from('banners').select('*').order('sort_order');
-  if (error) throw error;
-  return (data || []) as Banner[];
+  return readSupabaseRows<Banner>(
+    supabase.from('banners').select('*').order('sort_order'),
+    [],
+    'Failed to fetch banners.'
+  );
 }
 
 // ===== FAVORITES =====
 export async function fetchFavorites(userId: string) {
-  const { data, error } = await supabase.from('favorites').select('*').eq('user_id', userId).order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data || []) as Favorite[];
+  return readSupabaseRows<Favorite>(
+    supabase.from('favorites').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch favorites.'
+  );
 }
 
 export async function addFavorite(userId: string, contentId: string, contentType: 'movie' | 'series') {
-  const { error } = await supabase.from('favorites').upsert({ user_id: userId, content_id: contentId, content_type: contentType }, { onConflict: 'user_id,content_id' });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('favorites').upsert({ user_id: userId, content_id: contentId, content_type: contentType }, { onConflict: 'user_id,content_id' }),
+    'Failed to add favorite.'
+  );
 }
 
 export async function removeFavorite(userId: string, contentId: string) {
-  const { error } = await supabase.from('favorites').delete().eq('user_id', userId).eq('content_id', contentId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('favorites').delete().eq('user_id', userId).eq('content_id', contentId),
+    'Failed to remove favorite.'
+  );
 }
 
 // ===== WATCH HISTORY =====
 export async function fetchWatchHistory(userId: string) {
-  const { data, error } = await supabase.from('watch_history').select('*').eq('user_id', userId).order('last_watched_at', { ascending: false });
-  if (error) throw error;
-  return (data || []) as WatchHistory[];
+  return readSupabaseRows<WatchHistory>(
+    supabase.from('watch_history').select('*').eq('user_id', userId).order('last_watched_at', { ascending: false }),
+    [],
+    'Failed to fetch watch history.'
+  );
 }
 
 export async function upsertWatchHistory(userId: string, contentId: string, contentType: 'movie' | 'episode', progress: number, duration: number) {
-  const { error } = await supabase.from('watch_history').upsert({
-    user_id: userId,
-    content_id: contentId,
-    content_type: contentType,
-    progress,
-    duration,
-    last_watched_at: new Date().toISOString(),
-  }, { onConflict: 'user_id,content_id' });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('watch_history').upsert({
+      user_id: userId,
+      content_id: contentId,
+      content_type: contentType,
+      progress,
+      duration,
+      last_watched_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,content_id' }),
+    'Failed to update watch history.'
+  );
 }
 
 // ===== WATCH ROOMS =====
 export async function fetchActiveRooms() {
-  const { data, error } = await supabase
-    .from('watch_rooms')
-    .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
-    .eq('is_active', true)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
+  const data = await readSupabaseRows<any>(
+    supabase
+      .from('watch_rooms')
+      .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch active rooms.'
+  );
   const roomIds = (data || []).map((r: any) => r.id);
   if (roomIds.length === 0) return [];
-  const { data: members } = await supabase.from('watch_room_members').select('room_id').in('room_id', roomIds);
+  const members = await readSupabaseRows<{ room_id: string }>(
+    supabase.from('watch_room_members').select('room_id').in('room_id', roomIds),
+    [],
+    'Failed to fetch room members.'
+  );
   const countMap: Record<string, number> = {};
   (members || []).forEach((m: any) => { countMap[m.room_id] = (countMap[m.room_id] || 0) + 1; });
   return (data || []).map((r: any) => normalizeWatchRoom({ ...r, member_count: countMap[r.id] || 0 })) as WatchRoom[];
@@ -2664,46 +2784,61 @@ export async function createWatchRoom(room: {
   source_label?: string;
 }) {
   const room_code = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const { data, error } = await supabase.from('watch_rooms').insert({
-    ...room,
-    room_code,
-    stream_sources: room.stream_sources || [],
-  }).select().single();
-  if (error) throw error;
-  await supabase.from('watch_room_members').insert({ room_id: data.id, user_id: room.host_id });
+  const data = await writeSupabaseRow<any>(
+    supabase.from('watch_rooms').insert({
+      ...room,
+      room_code,
+      stream_sources: room.stream_sources || [],
+    }).select().single(),
+    'Failed to create watch room.'
+  );
+  await writeSupabaseMutation(
+    supabase.from('watch_room_members').insert({ room_id: data.id, user_id: room.host_id }),
+    'Failed to add host to watch room.'
+  );
   return normalizeWatchRoom(data);
 }
 
 export async function joinWatchRoom(roomId: string, userId: string) {
-  const { error } = await supabase.from('watch_room_members').upsert({ room_id: roomId, user_id: userId }, { onConflict: 'room_id,user_id' });
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('watch_room_members').upsert({ room_id: roomId, user_id: userId }, { onConflict: 'room_id,user_id' }),
+    'Failed to join watch room.'
+  );
 }
 
 export async function leaveWatchRoom(roomId: string, userId: string) {
-  const { error } = await supabase.from('watch_room_members').delete().eq('room_id', roomId).eq('user_id', userId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('watch_room_members').delete().eq('room_id', roomId).eq('user_id', userId),
+    'Failed to leave watch room.'
+  );
 }
 
 export async function fetchRoomMessages(roomId: string) {
-  const { data, error } = await supabase
-    .from('room_messages')
-    .select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)')
-    .eq('room_id', roomId)
-    .order('created_at', { ascending: true })
-    .limit(100);
-  if (error) throw error;
-  return (data || []) as RoomMessage[];
+  return readSupabaseRows<RoomMessage>(
+    supabase
+      .from('room_messages')
+      .select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: true })
+      .limit(100),
+    [],
+    'Failed to fetch room messages.'
+  );
 }
 
 export async function sendRoomMessage(roomId: string, userId: string, message: string) {
-  const { data, error } = await supabase.from('room_messages').insert({ room_id: roomId, user_id: userId, message }).select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)').single();
-  if (error) throw error;
+  const data = await writeSupabaseRow<any>(
+    supabase.from('room_messages').insert({ room_id: roomId, user_id: userId, message }).select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)').single(),
+    'Failed to send room message.'
+  );
   return data as RoomMessage;
 }
 
 export async function updateRoomPlayback(roomId: string, playbackTime: number, isPlaying: boolean) {
-  const { error } = await supabase.from('watch_rooms').update({ playback_time: playbackTime, is_playing: isPlaying }).eq('id', roomId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('watch_rooms').update({ playback_time: playbackTime, is_playing: isPlaying }).eq('id', roomId),
+    'Failed to update room playback.'
+  );
 }
 
 export async function updateWatchRoomMedia(
@@ -2719,37 +2854,42 @@ export async function updateWatchRoomMedia(
     source_label?: string;
   }
 ) {
-  const { data, error } = await supabase
-    .from('watch_rooms')
-    .update({
-      ...payload,
-      stream_sources: payload.stream_sources || [],
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', roomId)
-    .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
-    .single();
-  if (error) throw error;
+  const data = await writeSupabaseRow<any>(
+    supabase
+      .from('watch_rooms')
+      .update({
+        ...payload,
+        stream_sources: payload.stream_sources || [],
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', roomId)
+      .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
+      .single(),
+    'Failed to update watch room.'
+  );
   return normalizeWatchRoom(data);
 }
 
 export async function closeWatchRoom(roomId: string) {
-  const { error } = await supabase.from('watch_rooms').update({ is_active: false }).eq('id', roomId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('watch_rooms').update({ is_active: false }).eq('id', roomId),
+    'Failed to close watch room.'
+  );
 }
 
 // ===== APP SETTINGS =====
 export async function fetchAppSettings() {
-  const { data, error } = await supabase.from('app_settings').select('*');
-  if (error) throw error;
+  const data = await readSupabaseRows<any>(supabase.from('app_settings').select('*'), [], 'Failed to fetch app settings.');
   const settings: Record<string, string> = {};
   (data || []).forEach((s: any) => { settings[s.key] = s.value; });
   return settings;
 }
 
 export async function updateAppSetting(key: string, value: string) {
-  const { error } = await supabase.from('app_settings').update({ value, updated_at: new Date().toISOString() }).eq('key', key);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('app_settings').update({ value, updated_at: new Date().toISOString() }).eq('key', key),
+    'Failed to update app setting.'
+  );
   if (key === 'tmdb_api_key') tmdbCredentialCache = null;
 }
 
@@ -2815,11 +2955,13 @@ export async function fetchRuntimeContentInsight(
 }
 
 export async function upsertAppSetting(key: string, value: string) {
-  const { error } = await supabase.from('app_settings').upsert(
-    { key, value, updated_at: new Date().toISOString() },
-    { onConflict: 'key' }
+  await writeSupabaseMutation(
+    supabase.from('app_settings').upsert(
+      { key, value, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    ),
+    'Failed to save app setting.'
   );
-  if (error) throw error;
   visibilitySettingsCache = null;
   if (key === 'tmdb_api_key') tmdbCredentialCache = null;
 }
@@ -2897,12 +3039,7 @@ async function tmdbRequest<T>(path: string, params?: Record<string, string | num
     url.searchParams.set('language', 'en-US');
   }
 
-  const response = await fetch(url.toString(), { headers });
-  if (!response.ok) {
-    throw new Error(`TMDB request failed (${response.status})`);
-  }
-
-  return response.json() as Promise<T>;
+  return fetchJsonWithRetry<T>(url.toString(), { headers }, 12000, 2);
 }
 
 export async function validateTmdbCredential(rawCredential: string) {
@@ -2921,12 +3058,7 @@ export async function validateTmdbCredential(rawCredential: string) {
     url.searchParams.set('api_key', credential);
   }
 
-  const response = await fetch(url.toString(), { headers });
-  if (!response.ok) {
-    throw new Error(`TMDB validation failed (${response.status})`);
-  }
-
-  const data = await response.json();
+  const data = await fetchJsonWithRetry<{ id?: unknown }>(url.toString(), { headers }, 12000, 2);
   return {
     ok: Boolean(data?.id),
     mode: looksLikeTmdbReadAccessToken(credential) ? 'token' as const : 'api_key' as const,
@@ -2982,11 +3114,10 @@ export async function updateContentVisibility(
     Partial<Pick<Series, 'is_adult' | 'is_manually_blocked' | 'visibility_status'>>
 ) {
   const table = contentType === 'movie' ? 'movies' : 'series';
-  const { error } = await supabase
-    .from(table)
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from(table).update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id),
+    'Failed to update content visibility.'
+  );
 }
 
 function uniqueTextList(values: unknown[]) {
@@ -3042,11 +3173,21 @@ function buildMoveIdentity(ref: AddonExternalRef, snapshot: any) {
 }
 
 async function deleteSeriesTree(seriesId: string) {
-  const { data: seasons } = await supabase.from('seasons').select('id').eq('series_id', seriesId);
-  const seasonIds = (seasons || []).map((season: any) => season.id).filter(Boolean);
+  const seasons = await readSupabaseRows<{ id: string }>(
+    supabase.from('seasons').select('id').eq('series_id', seriesId),
+    [],
+    'Failed to load seasons for deletion.'
+  );
+  const seasonIds = seasons.map((season) => season.id).filter(Boolean);
   if (seasonIds.length > 0) {
-    await supabase.from('episodes').delete().in('season_id', seasonIds);
-    await supabase.from('seasons').delete().in('id', seasonIds);
+    await writeSupabaseMutation(
+      supabase.from('episodes').delete().in('season_id', seasonIds),
+      'Failed to delete season episodes.'
+    );
+    await writeSupabaseMutation(
+      supabase.from('seasons').delete().in('id', seasonIds),
+      'Failed to delete seasons.'
+    );
   }
   await deleteSeries(seriesId);
 }
@@ -3074,16 +3215,21 @@ async function cleanupMovedSourceContent(ref: AddonExternalRef) {
 }
 
 export async function fetchAddonImportedReviewItems(addonId: string): Promise<AddonImportedReviewItem[]> {
-  const [{ data: refs, error }, { data: addon }] = await Promise.all([
-    supabase.from('content_external_refs').select('*').eq('addon_id', addonId),
-    supabase.from('addons').select('id,name,description,catalogs').eq('id', addonId).maybeSingle(),
+  const [refs, addon] = await Promise.all([
+    readSupabaseRows<AddonExternalRef>(
+      supabase.from('content_external_refs').select('*').eq('addon_id', addonId),
+      [],
+      'Failed to fetch imported refs.'
+    ),
+    readSupabaseRow<any | null>(
+      supabase.from('addons').select('id,name,description,catalogs').eq('id', addonId).maybeSingle(),
+      'Failed to fetch addon.'
+    ),
   ]);
-
-  if (error) throw error;
   const stremio = await import('./stremio').catch(() => null);
 
   const items = await Promise.all(
-    ((refs || []) as AddonExternalRef[])
+    refs
       .filter((ref) => ref.content_type !== 'episode')
       .map(async (ref) => {
         const snapshot = await fetchContentSnapshotForMove(ref.content_type as 'movie' | 'series' | 'channel', ref.content_id).catch(() => null) as any;
@@ -3124,19 +3270,24 @@ export async function fetchAddonImportedReviewItems(addonId: string): Promise<Ad
 }
 
 export async function moveAddonImportedItem(refId: string, targetType: 'movie' | 'series' | 'channel') {
-  const { data: ref, error } = await supabase.from('content_external_refs').select('*').eq('id', refId).single();
-  if (error) throw error;
+  const ref = await readSupabaseRow<AddonExternalRef>(
+    supabase.from('content_external_refs').select('*').eq('id', refId).single(),
+    'Failed to load imported item.'
+  );
 
   const sourceRef = ref as AddonExternalRef;
   if (sourceRef.content_type === targetType) {
     return { moved: false, targetType, title: sourceRef.title || 'Untitled' };
   }
 
-  const { data: addon } = await supabase
-    .from('addons')
-    .select('id,name,description,catalogs')
-    .eq('id', sourceRef.addon_id)
-    .maybeSingle();
+  const addon = await readSupabaseRow<any | null>(
+    supabase
+      .from('addons')
+      .select('id,name,description,catalogs')
+      .eq('id', sourceRef.addon_id)
+      .maybeSingle(),
+    'Failed to fetch addon.'
+  );
 
   const stremio = await import('./stremio').catch(() => null);
   const snapshot = await fetchContentSnapshotForMove(
@@ -3342,16 +3493,17 @@ export async function moveAddonImportedItem(refId: string, targetType: 'movie' |
     }
   }
 
-  const { data: duplicateRef, error: duplicateError } = await supabase
-    .from('content_external_refs')
-    .select('id, content_id')
-    .eq('addon_id', sourceRef.addon_id)
-    .eq('content_type', targetType)
-    .eq('external_id', sourceRef.external_id)
-    .neq('id', refId)
-    .maybeSingle();
-
-  if (duplicateError) throw duplicateError;
+  const duplicateRef = await readSupabaseRow<{ id: string; content_id: string } | null>(
+    supabase
+      .from('content_external_refs')
+      .select('id, content_id')
+      .eq('addon_id', sourceRef.addon_id)
+      .eq('content_type', targetType)
+      .eq('external_id', sourceRef.external_id)
+      .neq('id', refId)
+      .maybeSingle(),
+    'Failed to find duplicate imported item.'
+  );
 
   if (duplicateRef?.id) {
     const { error: existingUpdateError } = await supabase
@@ -3368,27 +3520,26 @@ export async function moveAddonImportedItem(refId: string, targetType: 'movie' |
 
     if (existingUpdateError) throw existingUpdateError;
 
-    const { error: deleteError } = await supabase
-      .from('content_external_refs')
-      .delete()
-      .eq('id', refId);
-
-    if (deleteError) throw deleteError;
+    await writeSupabaseMutation(
+      supabase.from('content_external_refs').delete().eq('id', refId),
+      'Failed to remove moved imported item.'
+    );
   } else {
-    const { error: updateError } = await supabase
-      .from('content_external_refs')
-      .update({
-        content_type: targetType,
-        content_id: targetId,
-        title,
-        year: snapshot?.year || sourceRef.year || null,
-        imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
-        meta_json: sourceRef.meta_json || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', refId);
-
-    if (updateError) throw updateError;
+    await writeSupabaseMutation(
+      supabase
+        .from('content_external_refs')
+        .update({
+          content_type: targetType,
+          content_id: targetId,
+          title,
+          year: snapshot?.year || sourceRef.year || null,
+          imdb_id: sourceRef.imdb_id || sourceRef.meta_json?.imdb_id || null,
+          meta_json: sourceRef.meta_json || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', refId),
+      'Failed to update imported item.'
+    );
   }
 
   await cleanupMovedSourceContent(sourceRef);
@@ -3475,9 +3626,12 @@ export async function importTMDBContentById(tmdbId: number | string, mediaType: 
 
 // ===== ADMIN: MOVIES =====
 export async function fetchAllMoviesAdmin() {
-  const { data, error } = await supabase.from('movies').select('*').order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data || []).map((m: any) => normalizeMovie(m)) as Movie[];
+  const rows = await readSupabaseRows<any>(
+    supabase.from('movies').select('*').order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch movies.'
+  );
+  return rows.map((m) => normalizeMovie(m)) as Movie[];
 }
 
 export async function upsertMovie(movie: Partial<Movie>) {
@@ -3487,85 +3641,101 @@ export async function upsertMovie(movie: Partial<Movie>) {
     stream_url: serializeStreamSources(stream_sources, rest.stream_url),
   };
   if (id) {
-    const { data, error } = await supabase.from('movies').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('movies').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', id).select().single(),
+      'Failed to update movie.'
+    );
     return normalizeMovie(data);
   } else {
-    const { data, error } = await supabase.from('movies').insert(payload).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('movies').insert(payload).select().single(),
+      'Failed to create movie.'
+    );
     return normalizeMovie(data);
   }
 }
 
 export async function deleteMovie(id: string) {
-  const { error } = await supabase.from('movies').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('movies').delete().eq('id', id), 'Failed to delete movie.');
 }
 
 // ===== ADMIN: SERIES =====
 export async function fetchAllSeriesAdmin() {
-  const { data, error } = await supabase.from('series').select('*').order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data || []).map((s: any) => ({ ...s, type: 'series' as const, live_viewers: s?.live_viewers ?? 0 })) as Series[];
+  const rows = await readSupabaseRows<any>(
+    supabase.from('series').select('*').order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch series.'
+  );
+  return rows.map((s) => ({ ...s, type: 'series' as const, live_viewers: s?.live_viewers ?? 0 })) as Series[];
 }
 
 export async function upsertSeries(seriesItem: Partial<Series>) {
   const { id, type, seasons, ...rest } = seriesItem as any;
   if (id) {
-    const { data, error } = await supabase.from('series').update({ ...rest, updated_at: new Date().toISOString() }).eq('id', id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('series').update({ ...rest, updated_at: new Date().toISOString() }).eq('id', id).select().single(),
+      'Failed to update series.'
+    );
     return data;
   } else {
-    const { data, error } = await supabase.from('series').insert(rest).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('series').insert(rest).select().single(),
+      'Failed to create series.'
+    );
     return data;
   }
 }
 
 export async function deleteSeries(id: string) {
-  const { error } = await supabase.from('series').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('series').delete().eq('id', id), 'Failed to delete series.');
 }
 
 // ===== ADMIN: SEASONS =====
 export async function fetchSeasons(seriesId: string) {
-  const { data, error } = await supabase.from('seasons').select('*').eq('series_id', seriesId).order('number');
-  if (error) throw error;
-  return (data || []) as Season[];
+  return readSupabaseRows<Season>(
+    supabase.from('seasons').select('*').eq('series_id', seriesId).order('number'),
+    [],
+    'Failed to fetch seasons.'
+  );
 }
 
 export async function upsertSeason(season: Partial<Season>) {
   const { id, episodes, ...rest } = season as any;
   if (id) {
-    const { data, error } = await supabase.from('seasons').update(rest).eq('id', id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('seasons').update(rest).eq('id', id).select().single(),
+      'Failed to update season.'
+    );
     return data;
   } else {
-    const { data, error } = await supabase
-      .from('seasons')
-      .upsert(rest, { onConflict: 'series_id,number' })
-      .select()
-      .single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase
+        .from('seasons')
+        .upsert(rest, { onConflict: 'series_id,number' })
+        .select()
+        .single(),
+      'Failed to create season.'
+    );
     return data;
   }
 }
 
 export async function deleteSeason(id: string) {
-  const { error } = await supabase.from('seasons').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('seasons').delete().eq('id', id), 'Failed to delete season.');
 }
 
 // ===== ADMIN: EPISODES =====
 export async function fetchEpisodes(seasonId: string) {
-  const { data, error } = await supabase.from('episodes').select('*').eq('season_id', seasonId).order('number');
-  if (error) throw error;
-  return (data || []).map((episode: any) => normalizeEpisode(episode));
+  const rows = await readSupabaseRows<any>(
+    supabase.from('episodes').select('*').eq('season_id', seasonId).order('number'),
+    [],
+    'Failed to fetch episodes.'
+  );
+  return rows.map((episode) => normalizeEpisode(episode));
 }
 
 export async function fetchEpisodeById(id: string) {
-  const { data, error } = await supabase.from('episodes').select('*').eq('id', id).single();
-  if (error) throw error;
+  const data = await readSupabaseRow<any>(supabase.from('episodes').select('*').eq('id', id).single(), 'Failed to fetch episode.');
   return normalizeEpisode(data);
 }
 
@@ -3576,60 +3746,71 @@ export async function upsertEpisode(episode: Partial<Episode>) {
     stream_url: serializeStreamSources(stream_sources, rest.stream_url),
   };
   if (id) {
-    const { data, error } = await supabase.from('episodes').update(payload).eq('id', id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('episodes').update(payload).eq('id', id).select().single(),
+      'Failed to update episode.'
+    );
     return normalizeEpisode(data);
   } else {
-    const { data, error } = await supabase
-      .from('episodes')
-      .upsert(payload, { onConflict: 'season_id,number' })
-      .select()
-      .single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase
+        .from('episodes')
+        .upsert(payload, { onConflict: 'season_id,number' })
+        .select()
+        .single(),
+      'Failed to create episode.'
+    );
     return normalizeEpisode(data);
   }
 }
 
 export async function deleteEpisode(id: string) {
-  const { error } = await supabase.from('episodes').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('episodes').delete().eq('id', id), 'Failed to delete episode.');
 }
 
 // ===== ADMIN: UPDATE SERIES COUNTS =====
 export async function updateSeriesCounts(seriesId: string) {
-  const { data: seasons } = await supabase.from('seasons').select('id').eq('series_id', seriesId);
-  const totalSeasons = (seasons || []).length;
-  const { count: totalEpisodes } = await supabase.from('episodes').select('*', { count: 'exact', head: true }).eq('series_id', seriesId);
-  await supabase.from('series').update({ total_seasons: totalSeasons, total_episodes: totalEpisodes || 0, updated_at: new Date().toISOString() }).eq('id', seriesId);
+  const seasons = await readSupabaseRows<{ id: string }>(
+    supabase.from('seasons').select('id').eq('series_id', seriesId),
+    [],
+    'Failed to count seasons.'
+  );
+  const { count: totalEpisodes, error } = await supabase.from('episodes').select('*', { count: 'exact', head: true }).eq('series_id', seriesId);
+  if (error) throw new Error(getErrorMessage(error, 'Failed to count episodes.'));
+  await writeSupabaseMutation(
+    supabase.from('series').update({ total_seasons: seasons.length, total_episodes: totalEpisodes || 0, updated_at: new Date().toISOString() }).eq('id', seriesId),
+    'Failed to update series counts.'
+  );
 }
 
 // ===== ADMIN: USERS =====
 export async function fetchAllUsers() {
-  const { data, error } = await supabase.from('user_profiles').select('*').order('email');
-  if (error) throw error;
-  return data || [];
+  return readSupabaseRows<Record<string, unknown>>(
+    supabase.from('user_profiles').select('*').order('email'),
+    [],
+    'Failed to fetch users.'
+  );
 }
 
 export async function updateUserRole(userId: string, role: string) {
-  const { error } = await supabase.from('user_profiles').update({ role }).eq('id', userId);
-  if (error) throw error;
+  await writeSupabaseMutation(
+    supabase.from('user_profiles').update({ role }).eq('id', userId),
+    'Failed to update user role.'
+  );
 }
 
 // ===== ADMIN: BANNERS =====
 export async function upsertBanner(banner: Partial<Banner>) {
   const { id, ...rest } = banner as any;
   if (id) {
-    const { error } = await supabase.from('banners').update(rest).eq('id', id);
-    if (error) throw error;
+    await writeSupabaseMutation(supabase.from('banners').update(rest).eq('id', id), 'Failed to update banner.');
   } else {
-    const { error } = await supabase.from('banners').insert(rest);
-    if (error) throw error;
+    await writeSupabaseMutation(supabase.from('banners').insert(rest), 'Failed to create banner.');
   }
 }
 
 export async function deleteBanner(id: string) {
-  const { error } = await supabase.from('banners').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('banners').delete().eq('id', id), 'Failed to delete banner.');
 }
 
 // ===== ADMIN: CHANNELS =====
@@ -3640,19 +3821,22 @@ export async function upsertChannel(channel: Partial<Channel>) {
     stream_url: serializeStreamSources(stream_sources, rest.stream_url),
   };
   if (id) {
-    const { data, error } = await supabase.from('channels').update(payload).eq('id', id).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('channels').update(payload).eq('id', id).select().single(),
+      'Failed to update channel.'
+    );
     return data;
   } else {
-    const { data, error } = await supabase.from('channels').insert(payload).select().single();
-    if (error) throw error;
+    const data = await writeSupabaseRow<any>(
+      supabase.from('channels').insert(payload).select().single(),
+      'Failed to create channel.'
+    );
     return data;
   }
 }
 
 export async function deleteChannel(id: string) {
-  const { error } = await supabase.from('channels').delete().eq('id', id);
-  if (error) throw error;
+  await writeSupabaseMutation(supabase.from('channels').delete().eq('id', id), 'Failed to delete channel.');
 }
 
 // ===== ANALYTICS =====

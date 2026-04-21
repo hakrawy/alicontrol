@@ -1,5 +1,6 @@
 import * as externalImport from './externalImport';
 import type { ExternalImportItem, ExternalImportPreview } from './externalImport';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { importM3U as importM3UEdge, importXtream as importXtreamEdge } from '@/src/lib/edgeFunctions';
 
 export interface XtreamCredentials {
@@ -15,6 +16,24 @@ export interface ImportSystemPreview extends ExternalImportPreview {
   seriesCount: number;
   endpointStatus: Array<{ name: string; ok: boolean; message: string }>;
 }
+
+export interface ImportHistoryEntry {
+  id: string;
+  mode: 'xtream' | 'm3u';
+  label: string;
+  requestedUrl: string;
+  resolvedUrl: string;
+  createdAt: string;
+  total: number;
+  imported: number;
+  skipped: number;
+  validated: number;
+  status: 'success' | 'failed';
+  message: string;
+}
+
+const IMPORT_HISTORY_KEY = 'import_history_v1';
+const IMPORT_HISTORY_LIMIT = 8;
 
 function cleanHost(host: string) {
   let value = String(host || '').trim();
@@ -64,6 +83,19 @@ function isValidCredentials(credentials: XtreamCredentials) {
   return Boolean(normalized.host && normalized.username && normalized.password);
 }
 
+function apiUrl(credentials: XtreamCredentials, action: string, params: Record<string, string | number | undefined> = {}) {
+  const normalized = normalizeXtreamCredentials(credentials);
+  const url = new URL(`${cleanHost(normalized.host)}/player_api.php`);
+  url.searchParams.set('username', normalized.username);
+  url.searchParams.set('password', normalized.password);
+  url.searchParams.set('action', action);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    url.searchParams.set(key, String(value));
+  });
+  return url.toString();
+}
+
 async function fetchJsonEndpoint<T>(url: string, timeoutMs = 18000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -75,6 +107,49 @@ async function fetchJsonEndpoint<T>(url: string, timeoutMs = 18000): Promise<T> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+function createHistoryId() {
+  return `import_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export async function fetchImportHistory() {
+  try {
+    const raw = await AsyncStorage.getItem(IMPORT_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ImportHistoryEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function recordImportHistoryEntry(
+  entry: Omit<ImportHistoryEntry, 'id' | 'createdAt'> & { createdAt?: string }
+) {
+  const current = await fetchImportHistory();
+  const next: ImportHistoryEntry = {
+    id: createHistoryId(),
+    createdAt: entry.createdAt || new Date().toISOString(),
+    mode: entry.mode,
+    label: entry.label,
+    requestedUrl: entry.requestedUrl,
+    resolvedUrl: entry.resolvedUrl,
+    total: Number(entry.total || 0),
+    imported: Number(entry.imported || 0),
+    skipped: Number(entry.skipped || 0),
+    validated: Number(entry.validated || 0),
+    status: entry.status,
+    message: entry.message,
+  };
+
+  const nextHistory = [next, ...current].slice(0, IMPORT_HISTORY_LIMIT);
+  await AsyncStorage.setItem(IMPORT_HISTORY_KEY, JSON.stringify(nextHistory));
+  return next;
+}
+
+export async function clearImportHistory() {
+  await AsyncStorage.removeItem(IMPORT_HISTORY_KEY);
 }
 
 function categoryLabel(categories: Record<string, string>, id: unknown, fallback = '') {

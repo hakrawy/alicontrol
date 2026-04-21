@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
 import { AuthUser } from '../types';
 import { authService } from './service';
@@ -43,37 +42,30 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     let isMounted = true;
-    let authSubscription: any = null;
+    let authSubscription: { unsubscribe?: () => void } | null = null;
 
     const initializeAuth = async () => {
-      
+      let currentUser: AuthUser | null = null;
+
       try {
-        const currentUser = await authService.getCurrentUser();
-        
-        if (isMounted) {
-          updateState({ 
-            user: currentUser, 
-            loading: false, 
-            initialized: true 
-          });
-        }
-
-        authSubscription = authService.onAuthStateChange((authUser) => {
-          if (isMounted) {
-            updateState({ user: authUser });
-          }
-        });
-
+        currentUser = await authService.getCurrentUser();
       } catch (error) {
         console.warn('[Template:AuthProvider] Auth initialization failed:', error);
-        if (isMounted) {
-          updateState({ 
-            user: null, 
-            loading: false, 
-            initialized: true 
-          });
-        }
       }
+
+      if (!isMounted) return;
+
+      authSubscription = authService.onAuthStateChange((authUser) => {
+        if (isMounted) {
+          updateState({ user: authUser });
+        }
+      });
+
+      updateState({
+        user: currentUser,
+        loading: false,
+        initialized: true,
+      });
     };
 
     initializeAuth();
@@ -85,10 +77,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     };
   }, []); // Empty dependency array ensures single execution
-  const contextValue: AuthContextType = {
-    ...state,
-    setOperationLoading,
-  };
+  const contextValue = useMemo<AuthContextType>(
+    () => ({
+      ...state,
+      setOperationLoading,
+    }),
+    [state, setOperationLoading]
+  );
 
   return (
     <AuthContext.Provider value={contextValue}>

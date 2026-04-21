@@ -8,7 +8,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
-import Hls, { Events, ErrorTypes } from 'hls.js';
+import HlsLibrary, { Events, ErrorTypes } from 'hls.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../constants/theme';
 import { useAuth } from '@/template';
@@ -28,6 +28,10 @@ import type { PlaybackSource, PlaybackSourceDiagnostic, SourceHistoryRecord } fr
 
 type MediaKind = 'direct' | 'youtube' | 'web' | 'dash';
 type PlayerSource = PlaybackSource;
+
+function isHlsSupported() {
+  return Boolean((HlsLibrary as unknown as { isSupported?: () => boolean }).isSupported?.());
+}
 
 function getYouTubeVideoId(rawUrl: string): string | null {
   try {
@@ -308,6 +312,7 @@ function WebDirectPlayer({
   selectedSourceIndex,
   onSelectSource,
   onPlaybackFailure,
+  onRetryPlayback,
   mediaKind,
   subtitleUrl,
   initialResumeTime = 0,
@@ -320,6 +325,7 @@ function WebDirectPlayer({
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
   onPlaybackFailure: (reason?: string) => void;
+  onRetryPlayback: () => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
   initialResumeTime?: number;
@@ -341,7 +347,7 @@ function WebDirectPlayer({
   const [playbackError, setPlaybackError] = useState('');
   const [captionsEnabled, setCaptionsEnabled] = useState(Boolean(subtitleUrl));
   const [progressTrackWidth, setProgressTrackWidth] = useState(0);
-  const [hlsLevels, setHlsLevels] = useState<Array<{ height: number; bitrate: number; index: number }>>([]);
+  const [hlsLevels, setHlsLevels] = useState<{ height: number; bitrate: number; index: number }[]>([]);
   const [currentLevel, setCurrentLevel] = useState(-1);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -350,7 +356,7 @@ function WebDirectPlayer({
   const startupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<any>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const hlsRef = useRef<HlsLibrary | null>(null);
   const didApplyResumeRef = useRef(false);
   const didReportSuccessRef = useRef(false);
 
@@ -428,7 +434,7 @@ function WebDirectPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    let hls: Hls | null = null;
+    let hls: HlsLibrary | null = null;
     let mediaErrorCount = 0;
     let networkErrorCount = 0;
 
@@ -463,8 +469,8 @@ function WebDirectPlayer({
       }
     }, 15000);
 
-    if (isHlsUrl(playbackUrl) && Hls.isSupported()) {
-      hls = new Hls({
+      if (isHlsUrl(playbackUrl) && isHlsSupported()) {
+      hls = new HlsLibrary({
         lowLatencyMode: false,
         enableWorker: true,
         backBufferLength: 90,
@@ -792,6 +798,17 @@ function WebDirectPlayer({
               <MaterialIcons name="settings" size={20} color="#FFF" />
             </Pressable>
 
+            <Pressable
+              style={styles.topBarBtn}
+              onPress={() => {
+                Haptics.selectionAsync();
+                onRetryPlayback();
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialIcons name="refresh" size={20} color="#FFF" />
+            </Pressable>
+
             {subtitleUrl ? (
               <Pressable
                 style={[styles.topBarBtn, captionsEnabled && styles.topBarBtnActive]}
@@ -1025,9 +1042,11 @@ function NativeDirectVideoPlayer({
   selectedSourceIndex,
   onSelectSource,
   onPlaybackFailure: _onPlaybackFailure,
+  onRetryPlayback,
   onPlaybackSuccess: _onPlaybackSuccess,
   mediaKind,
   subtitleUrl,
+  initialResumeTime = 0,
 }: {
   url: string;
   title: string;
@@ -1035,9 +1054,11 @@ function NativeDirectVideoPlayer({
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
   onPlaybackFailure: (reason?: string) => void;
+  onRetryPlayback: () => void;
   onPlaybackSuccess?: () => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
+  initialResumeTime?: number;
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -1068,6 +1089,23 @@ function NativeDirectVideoPlayer({
     instance.loop = false;
     instance.play();
   });
+
+  useEffect(() => {
+    if (!initialResumeTime || initialResumeTime <= 5) return;
+    const timer = setTimeout(() => {
+      try {
+        const targetTime = Math.max(0, initialResumeTime);
+        const safeTime = Number.isFinite(player.duration) && player.duration > 0
+          ? Math.min(targetTime, Math.max((player.duration || 0) - 3, 0))
+          : targetTime;
+        player.currentTime = safeTime;
+      } catch {
+        // ignore
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [initialResumeTime, player]);
 
   useEffect(() => {
     const sub = player.addListener('playingChange', (playing) => {
@@ -1180,6 +1218,17 @@ function NativeDirectVideoPlayer({
               }}
             >
               <MaterialIcons name="settings" size={20} color="#FFF" />
+            </Pressable>
+
+            <Pressable
+              style={styles.topBarBtn}
+              onPress={() => {
+                Haptics.selectionAsync();
+                onRetryPlayback();
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialIcons name="refresh" size={20} color="#FFF" />
             </Pressable>
 
             {subtitleUrl ? (
@@ -1335,9 +1384,11 @@ function DirectVideoPlayer(props: {
   selectedSourceIndex: number;
   onSelectSource: (index: number) => void;
   onPlaybackFailure: (reason?: string) => void;
+  onRetryPlayback: () => void;
   onPlaybackSuccess?: () => void;
   mediaKind: MediaKind;
   subtitleUrl?: string;
+  initialResumeTime?: number;
 }) {
   if (Platform.OS === 'web') return <WebDirectPlayer {...props} />;
   return <NativeDirectVideoPlayer {...props} />;
@@ -1612,13 +1663,14 @@ export default function PlayerScreenWrapper() {
 
 function PlayerScreen() {
   const { user } = useAuth();
-  const { url, title, sources, subtitleUrl, viewerContentId, viewerContentType } = useLocalSearchParams<{
+  const { url, title, sources, subtitleUrl, viewerContentId, viewerContentType, initialResumeTime } = useLocalSearchParams<{
     url?: string;
     title?: string;
     sources?: string;
     subtitleUrl?: string;
     viewerContentId?: string;
     viewerContentType?: api.ViewerContentType;
+    initialResumeTime?: string;
   }>();
 
   const parsedSources = useMemo(() => parseSourcesParam(sources, url), [sources, url]);
@@ -1627,9 +1679,9 @@ function PlayerScreen() {
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
   const [autoFallbackReason, setAutoFallbackReason] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [historyByKey, setHistoryByKey] = useState<Record<string, SourceHistoryRecord | undefined>>({});
+  const [, setHistoryByKey] = useState<Record<string, SourceHistoryRecord | undefined>>({});
   const [failedSourceKeys, setFailedSourceKeys] = useState<string[]>([]);
-  const [diagnostics, setDiagnostics] = useState<PlaybackSourceDiagnostic[]>([]);
+  const [, setDiagnostics] = useState<PlaybackSourceDiagnostic[]>([]);
   const [isPreflighting, setIsPreflighting] = useState(true);
   const [preflightLogs, setPreflightLogs] = useState<string[]>(['Initializing player...']);
   const [proxyUrl, setProxyUrl] = useState('');
@@ -1643,6 +1695,8 @@ function PlayerScreen() {
     'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
 
   const safeTitle = title || 'Now Playing';
+  const parsedInitialResumeTime = Number(initialResumeTime || 0);
+  const resumeStartTime = Number.isFinite(parsedInitialResumeTime) && parsedInitialResumeTime > 0 ? parsedInitialResumeTime : 0;
   const preferenceKey = `player-preference:${viewerContentType || 'unknown'}:${viewerContentId || safeTitle}`;
   const sourceHealthMeta = getSourceHealthMeta(activeSource);
   const sourceIndicatorLabel = [activeSource?.addon || activeSource?.server || activeSource?.label, activeSource?.quality || null]
@@ -1984,6 +2038,11 @@ function PlayerScreen() {
     rememberPlaybackSuccess(activeSource);
   }, [rememberPlaybackSuccess, activeSource]);
 
+  const handleRetryPlayback = useCallback(() => {
+    setAutoFallbackReason(null);
+    setRetryToken((value) => value + 1);
+  }, []);
+
   if (isPreflighting) {
     return (
       <View style={styles.unsupportedContainer}>
@@ -2031,25 +2090,27 @@ function PlayerScreen() {
     );
   } else if (mediaKind === 'direct') {
     playerBody = (
-      <DirectVideoPlayer
-        url={resolvedUrl}
-        title={safeTitle}
-        sources={availableSources}
-        selectedSourceIndex={selectedSourceIndex}
-        onSelectSource={handleSelectSource}
-        onPlaybackFailure={handlePlaybackFailure}
-        onPlaybackSuccess={handlePlaybackSuccess}
-        mediaKind={mediaKind}
-        subtitleUrl={subtitleUrl}
-        key={`${resolvedUrl}:${selectedSourceIndex}:${retryToken}`}
-      />
+        <DirectVideoPlayer
+          url={resolvedUrl}
+          title={safeTitle}
+          sources={availableSources}
+          selectedSourceIndex={selectedSourceIndex}
+          onSelectSource={handleSelectSource}
+          onPlaybackFailure={handlePlaybackFailure}
+          onRetryPlayback={handleRetryPlayback}
+          onPlaybackSuccess={handlePlaybackSuccess}
+          mediaKind={mediaKind}
+          subtitleUrl={subtitleUrl}
+          initialResumeTime={resumeStartTime}
+          key={`${resolvedUrl}:${selectedSourceIndex}:${retryToken}`}
+        />
     );
   } else if (mediaKind === 'dash') {
     playerBody = (
-      <DashPlayer
-        url={resolvedUrl}
-        title={safeTitle}
-        sources={availableSources}
+        <DashPlayer
+          url={resolvedUrl}
+          title={safeTitle}
+          sources={availableSources}
         selectedSourceIndex={selectedSourceIndex}
         onSelectSource={handleSelectSource}
       />

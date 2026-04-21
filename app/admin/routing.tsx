@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
@@ -36,7 +36,7 @@ export default function AdminRoutingScreen() {
   };
   const moveAllLabel = ar ? 'نقل الكل إلى' : 'Move All To';
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!addonId) {
       setItems([]);
       setLoading(false);
@@ -50,11 +50,11 @@ export default function AdminRoutingScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addonId, showAlert]);
 
   useEffect(() => {
     void load();
-  }, [addonId]);
+  }, [load]);
 
   const visibleItems = useMemo(() => {
     const query = search.trim().toLowerCase();

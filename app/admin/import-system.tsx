@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAlert } from '@/template';
 import { importM3U, importXtream, type ImportOperationResult } from '../../src/lib/edgeFunctions';
+import { clearImportHistory, fetchImportHistory, recordImportHistoryEntry, type ImportHistoryEntry } from '../../services/importSystem';
+import { recordAdminActivity } from '../../services/adminActivity';
 import { theme } from '../../constants/theme';
 import { useLocale } from '../../contexts/LocaleContext';
 
@@ -36,6 +38,7 @@ export default function ImportSystemAdmin() {
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [history, setHistory] = useState<ImportHistoryEntry[]>([]);
 
   const copy = useMemo(() => ({
     title: ar ? 'نظام الاستيراد' : 'Import System',
@@ -67,7 +70,53 @@ export default function ImportSystemAdmin() {
     failedSamples: ar ? 'أمثلة فاشلة' : 'Failed samples',
     importedSeries: ar ? 'المسلسلات' : 'Series',
     importedEpisodes: ar ? 'الحلقات' : 'Episodes',
+    historyTitle: ar ? 'ط³ط¬ظ„ ط§ظ„ط§ط³طھظٹط±ط§ط¯' : 'Import history',
+    historyHint: ar ? 'ط¢ط®ط± ط§ظ„ط¹ظ…ظ„ظٹط§طھ ط§ظ„ظ…ظ†ط¬ط²ط© ط£ظˆ ط§ظ„ظپط§ط´ظ„ط©.' : 'Recent successful and failed import attempts.',
+    historyEmpty: ar ? 'ظ„ط§ ظٹظˆط¬ط¯ ط³ط¬ظ„ ط¨ط¹ط¯.' : 'No import history yet.',
+    historySuccess: ar ? 'ط§ظ†ط¬ط§ط­' : 'Success',
+    historyFailed: ar ? 'ظپط´ظ„' : 'Failed',
+    historyImported: ar ? 'ط§ظ„ظ…ط³طھظˆط±ط¯' : 'Imported',
+    historyValidated: ar ? 'ط§ظ„ظ…طھط­ظ‚ظ‚ ظ…ظ†ظ‡' : 'Validated',
+    historySkipped: ar ? 'ط§ظ„ظ…طھط¬ط§ظˆط²' : 'Skipped',
   }), [ar]);
+
+  useEffect(() => {
+    let active = true;
+    fetchImportHistory().then((entries) => {
+      if (active) setHistory(entries);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const storeHistoryEntry = async (entry: Parameters<typeof recordImportHistoryEntry>[0]) => {
+    try {
+      const saved = await recordImportHistoryEntry(entry);
+      setHistory((current) => [saved, ...current].slice(0, 8));
+    } catch {
+      // History should never block the import flow.
+    }
+  };
+
+  const logAdminActivity = async (title: string, detail: string, level: 'info' | 'success' | 'warning' | 'error') => {
+    try {
+      await recordAdminActivity({ title, detail, level });
+    } catch {
+      // Logging should never block the import flow.
+    }
+  };
+
+  const handleClearHistory = async () => {
+    try {
+      await clearImportHistory();
+      setHistory([]);
+      showAlert(copy.historyTitle, copy.historyEmpty);
+    } catch (error: any) {
+      const message = error?.message || (ar ? 'ط¹ط¬ط²طھ ط¹ظ…ظ„ظٹط© ط§ظ„ط­ط°ظپ.' : 'Could not clear history.');
+      showAlert(copy.error, message);
+    }
+  };
 
   const submit = async () => {
     if (loading) return;
@@ -83,10 +132,36 @@ export default function ImportSystemAdmin() {
 
       const nextSummary = buildSummary(mode, result);
       setSummary(nextSummary);
+      await storeHistoryEntry({
+        mode,
+        label: String(nextSummary.label),
+        requestedUrl: String(mode === 'xtream' ? host : m3uUrl),
+        resolvedUrl: String((result as { resolvedUrl?: string }).resolvedUrl || (mode === 'xtream' ? host : m3uUrl)),
+        status: 'success',
+        message: String(copy.success),
+        total: Number(nextSummary.total || 0),
+        imported: Number(nextSummary.imported || 0),
+        skipped: Number(nextSummary.skipped || 0),
+        validated: Number(nextSummary.validated || 0),
+      });
+      void logAdminActivity('Import completed', `${nextSummary.label} imported ${Number(nextSummary.imported || 0)} items.`, 'success');
       showAlert(copy.success, `${copy.imported}: ${Number(nextSummary.imported || 0)}`);
     } catch (error: any) {
       const message = error?.message || (ar ? 'تعذر إكمال العملية.' : 'Could not complete the request.');
       setErrorMessage(message);
+      await storeHistoryEntry({
+        mode,
+        label: mode === 'xtream' ? 'Xtream Import' : 'M3U Import',
+        requestedUrl: String(mode === 'xtream' ? host : m3uUrl),
+        resolvedUrl: String(mode === 'xtream' ? host : m3uUrl),
+        status: 'failed',
+        message: String(message),
+        total: 0,
+        imported: 0,
+        skipped: 0,
+        validated: 0,
+      });
+      void logAdminActivity('Import failed', `${mode === 'xtream' ? 'Xtream' : 'M3U'} import failed: ${message}`, 'error');
       showAlert(copy.error, message);
     } finally {
       setLoading(false);
@@ -207,6 +282,46 @@ export default function ImportSystemAdmin() {
           <Text style={styles.errorText}>{errorMessage}</Text>
         </View>
       ) : null}
+
+      <View style={styles.historyCard}>
+        <View style={styles.historyHeaderRow}>
+          <View style={styles.summaryHeader}>
+            <MaterialIcons name="history" size={18} color={theme.textSecondary} />
+            <Text style={styles.historyTitle}>{copy.historyTitle}</Text>
+          </View>
+          <Pressable style={styles.historyClearBtn} onPress={handleClearHistory}>
+            <MaterialIcons name="delete-outline" size={16} color={theme.textSecondary} />
+            <Text style={styles.historyClearText}>{ar ? 'طھظ…ط³ظٹط­' : 'Clear'}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.sectionHint}>{copy.historyHint}</Text>
+        {history.length === 0 ? (
+          <Text style={styles.historyEmpty}>{copy.historyEmpty}</Text>
+        ) : (
+          <View style={styles.historyList}>
+            {history.map((entry) => (
+              <View key={entry.id} style={styles.historyItem}>
+                <View style={styles.historyItemHeader}>
+                  <Text style={styles.historyItemLabel}>{entry.label}</Text>
+                  <View style={[styles.historyBadge, entry.status === 'success' ? styles.historyBadgeSuccess : styles.historyBadgeFailed]}>
+                    <Text style={styles.historyBadgeText}>{entry.status === 'success' ? copy.historySuccess : copy.historyFailed}</Text>
+                  </View>
+                </View>
+                <Text style={styles.historyMeta}>
+                  {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : ''}
+                </Text>
+                <Text style={styles.historyMeta}>{entry.requestedUrl}</Text>
+                <View style={styles.historyMetrics}>
+                  <Text style={styles.historyMetric}>{copy.historyImported}: {Number(entry.imported || 0)}</Text>
+                  <Text style={styles.historyMetric}>{copy.historyValidated}: {Number(entry.validated || 0)}</Text>
+                  <Text style={styles.historyMetric}>{copy.historySkipped}: {Number(entry.skipped || 0)}</Text>
+                </View>
+                {entry.message ? <Text style={styles.historyMessage}>{entry.message}</Text> : null}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
     </ScrollView>
   );
 }
@@ -251,4 +366,22 @@ const styles = StyleSheet.create({
   summaryText: { color: '#DCFCE7', fontSize: 12, lineHeight: 18 },
   errorCard: { marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(239,68,68,0.22)', backgroundColor: 'rgba(239,68,68,0.08)', padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#FECACA', fontSize: 12, lineHeight: 18 },
+  historyCard: { marginTop: 14, borderRadius: 20, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface, padding: 14, gap: 10 },
+  historyHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  historyTitle: { color: '#FFF', fontSize: 15, fontWeight: '900' },
+  historyClearBtn: { minHeight: 34, borderRadius: 999, borderWidth: 1, borderColor: theme.borderLight, backgroundColor: theme.backgroundSecondary, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  historyClearText: { color: theme.textSecondary, fontSize: 11, fontWeight: '800' },
+  historyEmpty: { color: theme.textSecondary, fontSize: 12, lineHeight: 18 },
+  historyList: { gap: 10 },
+  historyItem: { borderRadius: 16, borderWidth: 1, borderColor: theme.borderLight, backgroundColor: theme.backgroundSecondary, padding: 12, gap: 6 },
+  historyItemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  historyItemLabel: { color: '#FFF', fontSize: 14, fontWeight: '800', flex: 1 },
+  historyBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  historyBadgeSuccess: { backgroundColor: 'rgba(16,185,129,0.16)' },
+  historyBadgeFailed: { backgroundColor: 'rgba(239,68,68,0.16)' },
+  historyBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  historyMeta: { color: theme.textSecondary, fontSize: 11, lineHeight: 16 },
+  historyMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  historyMetric: { color: theme.textPrimary, fontSize: 11, fontWeight: '700' },
+  historyMessage: { color: theme.textMuted, fontSize: 11, lineHeight: 16, marginTop: 2 },
 });

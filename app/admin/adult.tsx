@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -16,7 +16,8 @@ type FilterMode = 'all' | 'visible' | 'hidden' | 'blocked';
 export default function AdminAdultContent() {
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
-  const { language, direction, isRTL } = useLocale();
+  const { language, direction } = useLocale();
+  const isRTL = direction === 'rtl';
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
@@ -76,7 +77,7 @@ export default function AdminAdultContent() {
     [language]
   );
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.fetchAdultContentAdmin();
@@ -86,11 +87,11 @@ export default function AdminAdultContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [copy.loadFailed, copy.loadTitle, showAlert]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const filtered = useMemo(
     () =>

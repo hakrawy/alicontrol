@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
@@ -54,6 +54,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [userDataLoading, setUserDataLoading] = useState(false);
   const [userRole, setUserRole] = useState('user');
+  const allMoviesRef = useRef<ContentItem[]>([]);
+  const allSeriesRef = useRef<ContentItem[]>([]);
+  const channelsRef = useRef<Channel[]>([]);
 
   const applyViewerCounts = useCallback((
     movies: ContentItem[],
@@ -74,6 +77,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       live_viewers: counts ? (counts.channel[channel.id] || 0) : channel.viewers,
     }));
 
+    allMoviesRef.current = nextMovies;
+    allSeriesRef.current = nextSeries;
+    channelsRef.current = nextChannels;
     setAllMovies(nextMovies);
     setAllSeries(nextSeries);
     setTrendingMovies([...nextMovies, ...nextSeries].filter(c => c.is_trending).slice(0, 10));
@@ -141,6 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     try {
       setUserDataLoading(true);
+      setUserRole('user');
       const [favData, historyData] = await Promise.all([
         api.fetchFavorites(user.id),
         api.fetchWatchHistory(user.id),
@@ -152,9 +159,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const { getSupabaseClient } = await import('@/template');
       const supabase = getSupabaseClient();
       const { data: profile } = await supabase.from('user_profiles').select('role').eq('id', user.id).single();
-      if (profile?.role) setUserRole(profile.role);
+      setUserRole(profile?.role || 'user');
     } catch (err) {
       console.error('Failed to load user data:', err);
+      setUserRole('user');
     } finally {
       setUserDataLoading(false);
     }
@@ -163,12 +171,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshViewerCounts = useCallback(async () => {
     try {
       const counts = await api.fetchActiveViewerCounts();
-      applyViewerCounts(allMovies, allSeries, channels, counts);
+      applyViewerCounts(allMoviesRef.current, allSeriesRef.current, channelsRef.current, counts);
     } catch (err) {
       console.error('Failed to refresh viewer counts:', err);
-      applyViewerCounts(allMovies, allSeries, channels, null);
+      applyViewerCounts(allMoviesRef.current, allSeriesRef.current, channelsRef.current, null);
     }
-  }, [allMovies, allSeries, channels, applyViewerCounts]);
+  }, [applyViewerCounts]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadHomeData(), loadUserData()]);
@@ -183,12 +191,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [loadUserData]);
 
   useEffect(() => {
-    if (allMovies.length === 0 && allSeries.length === 0 && channels.length === 0) return;
+    if (allMoviesRef.current.length === 0 && allSeriesRef.current.length === 0 && channelsRef.current.length === 0) return;
     const interval = setInterval(() => {
       void refreshViewerCounts();
     }, 15000);
     return () => clearInterval(interval);
-  }, [allMovies.length, allSeries.length, channels.length, refreshViewerCounts]);
+  }, [refreshViewerCounts, allMovies.length, allSeries.length, channels.length]);
 
   const addToFavorites = useCallback(async (contentId: string, contentType: 'movie' | 'series') => {
     if (!user?.id) return;
@@ -221,8 +229,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.id]);
 
-  return (
-    <AppContext.Provider value={{
+  const contextValue = useMemo(() => ({
       banners,
       trendingMovies,
       featuredMovies,
@@ -243,7 +250,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateWatchProgress,
       isAdmin: userRole === 'admin',
       userRole,
-    }}>
+    }), [
+      banners,
+      trendingMovies,
+      featuredMovies,
+      newContent,
+      allSeries,
+      allMovies,
+      channels,
+      activeRooms,
+      dynamicSections,
+      favorites,
+      watchHistory,
+      loading,
+      userDataLoading,
+      refreshAll,
+      addToFavorites,
+      removeFromFavorites,
+      isFavorite,
+      updateWatchProgress,
+      userRole,
+    ]);
+
+  return (
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

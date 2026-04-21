@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import {
-  View, Text, ScrollView, Pressable, Dimensions, StyleSheet, TextInput,
+  View, Text, ScrollView, Pressable, StyleSheet, TextInput, useWindowDimensions,
   NativeSyntheticEvent, NativeScrollEvent, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -14,21 +14,23 @@ import { theme } from '../../constants/theme';
 import { config } from '../../constants/config';
 import { useAppContext } from '../../contexts/AppContext';
 import { formatViewers } from '../../services/api';
-import type { ContentItem, Banner, WatchHistory } from '../../services/api';
+import type { ContentItem } from '../../services/api';
 import * as api from '../../services/api';
-import { useAuth } from '@/template';
 import { useLocale } from '../../contexts/LocaleContext';
 import { buildContentRoute } from '../../services/navigation';
 import { PremiumLoader } from '../../components/PremiumLoader';
 import { CinematicBackdrop } from '../../components/CinematicUI';
 import { useAdaptivePerformance } from '../../hooks/useAdaptivePerformance';
+import NotificationCenter from '../../components/NotificationCenter';
+import { fetchNotifications, getUnreadNotificationCount, markAllNotificationsRead, markNotificationRead, clearNotifications, recordNotification } from '../../services/notifications';
+import { prefetchHomeAssets } from '../../services/homePrefetch';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuth();
   const perf = useAdaptivePerformance();
   const { language, isRTL, direction } = useLocale();
+  const { width: screenWidth } = useWindowDimensions();
   const {
     banners, trendingMovies, featuredMovies, newContent, allSeries, allMovies,
     channels, activeRooms, dynamicSections, isFavorite, addToFavorites, loading, refreshHome, watchHistory,
@@ -37,8 +39,11 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [homeSearch, setHomeSearch] = useState('');
   const [continueWatching, setContinueWatching] = useState<(ContentItem & { progress: number; watch_duration: number })[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notificationTrayVisible, setNotificationTrayVisible] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const heroRef = useRef<ScrollView>(null);
-  const { width: screenWidth } = (require('react-native') as any).useWindowDimensions();
+  const prefetchKeyRef = useRef('');
   const HERO_HEIGHT = Math.min(460, screenWidth * 0.7);
   const copy = language === 'Arabic'
     ? {
@@ -86,7 +91,21 @@ export default function HomeScreen() {
       setActiveHero(next);
     }, 5000);
     return () => clearInterval(interval);
-  }, [activeHero, banners.length]);
+  }, [activeHero, banners.length, screenWidth]);
+
+  useEffect(() => {
+    let active = true;
+    const sync = async () => {
+      const [items, unread] = await Promise.all([fetchNotifications(), getUnreadNotificationCount()]);
+      if (!active) return;
+      setNotifications(items);
+      setUnreadNotificationCount(unread);
+    };
+    void sync();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Load continue watching data
   useEffect(() => {
@@ -106,9 +125,65 @@ export default function HomeScreen() {
     loadContinue();
   }, [watchHistory]);
 
+  useEffect(() => {
+    const key = [
+      banners.length,
+      trendingMovies.length,
+      featuredMovies.length,
+      newContent.length,
+      allMovies.length,
+      allSeries.length,
+      channels.length,
+      activeRooms.length,
+    ].join(':');
+
+    if (!key || key === prefetchKeyRef.current) return;
+    prefetchKeyRef.current = key;
+
+    void prefetchHomeAssets({
+      banners,
+      trendingMovies,
+      featuredMovies,
+      newContent,
+      allMovies,
+      allSeries,
+      channels,
+      activeRooms,
+      limit: 14,
+    });
+
+    void recordNotification({
+      title: 'Home updated',
+      body: `${banners.length} banners, ${allMovies.length + allSeries.length} titles, and ${channels.length} channels are ready.`,
+      level: 'info',
+      dedupeKey: `home-update:${key}`,
+    });
+
+    if (newContent.length > 0) {
+      void recordNotification({
+        title: 'New releases available',
+        body: `${newContent.length} fresh titles were loaded for discovery.`,
+        level: 'success',
+        dedupeKey: `new-content:${newContent.length}:${newContent[0]?.id || 'none'}`,
+      });
+    }
+
+    if (continueWatching.length > 0) {
+      void recordNotification({
+        title: 'Continue watching',
+        body: `${continueWatching.length} items are waiting in your queue.`,
+        level: 'info',
+        dedupeKey: `continue-watching:${continueWatching.length}:${continueWatching[0]?.id || 'none'}`,
+      });
+    }
+  }, [activeRooms, allMovies, allSeries, banners, channels, continueWatching, featuredMovies, newContent, trendingMovies]);
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     await refreshHome();
+    const [items, unread] = await Promise.all([fetchNotifications(), getUnreadNotificationCount()]);
+    setNotifications(items);
+    setUnreadNotificationCount(unread);
     setRefreshing(false);
   }, [refreshHome]);
 
@@ -137,6 +212,31 @@ export default function HomeScreen() {
       },
     });
   };
+
+  const handleOpenNotifications = useCallback(async () => {
+    const [items, unread] = await Promise.all([fetchNotifications(), getUnreadNotificationCount()]);
+    setNotifications(items);
+    setUnreadNotificationCount(unread);
+    setNotificationTrayVisible(true);
+  }, []);
+
+  const handleMarkNotificationRead = useCallback(async (id: string) => {
+    const next = await markNotificationRead(id);
+    setNotifications(next);
+    setUnreadNotificationCount(next.filter((item) => !item.readAt).length);
+  }, []);
+
+  const handleMarkAllNotificationsRead = useCallback(async () => {
+    const next = await markAllNotificationsRead();
+    setNotifications(next);
+    setUnreadNotificationCount(0);
+  }, []);
+
+  const handleClearNotifications = useCallback(async () => {
+    await clearNotifications();
+    setNotifications([]);
+    setUnreadNotificationCount(0);
+  }, []);
 
   const featuredChannels = channels.filter(c => c.is_featured && c.is_live);
   const movieCategoryShelves = useMemo(
@@ -451,11 +551,26 @@ export default function HomeScreen() {
           <Pressable style={styles.headerIcon} onPress={() => router.push('/watchroom')}>
             <MaterialIcons name="groups" size={24} color="#FFF" />
           </Pressable>
-          <Pressable style={styles.headerIcon}>
+          <Pressable style={styles.headerIcon} onPress={handleOpenNotifications}>
             <MaterialIcons name="notifications-none" size={24} color="#FFF" />
+            {unreadNotificationCount > 0 ? (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>{unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}</Text>
+              </View>
+            ) : null}
           </Pressable>
         </View>
       </View>
+
+      <NotificationCenter
+        visible={notificationTrayVisible}
+        notifications={notifications}
+        unreadCount={unreadNotificationCount}
+        onClose={() => setNotificationTrayVisible(false)}
+        onMarkRead={handleMarkNotificationRead}
+        onMarkAllRead={handleMarkAllNotificationsRead}
+        onClearAll={handleClearNotifications}
+      />
     </CinematicBackdrop>
   );
 }
@@ -538,7 +653,9 @@ const styles = StyleSheet.create({
   brandMark: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.primary, shadowColor: theme.primary, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
   appTitle: { fontSize: 24, fontWeight: '900', color: '#FFF', letterSpacing: -0.6 },
   headerIcons: { flexDirection: 'row', gap: 16 },
-  headerIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  headerIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', position: 'relative' },
+  notificationBadge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: theme.error, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  notificationBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '900' },
   heroContent: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 20, paddingBottom: 20 },
   homeSearchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
   homeSearchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, paddingHorizontal: 14, height: 50 },

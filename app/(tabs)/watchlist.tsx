@@ -4,7 +4,6 @@ import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/template';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
@@ -17,9 +16,8 @@ import { buildContentRoute } from '../../services/navigation';
 export default function WatchlistScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuth();
   const { favorites, removeFromFavorites, refreshHome } = useAppContext();
-  const { language, isRTL, direction } = useLocale();
+  const { language, direction } = useLocale();
   const [items, setItems] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

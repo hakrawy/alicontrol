@@ -249,10 +249,6 @@ export async function validateSubscriptionCode(rawCode: string) {
     expiresAt: response.expiresAt || null,
   };
 
-  if (!session.expiresAt) {
-    throw new Error(response.message || 'Subscription code did not return an expiration date.');
-  }
-
   await saveSubscriptionSession(session);
   return session;
 }
@@ -262,7 +258,7 @@ export async function getSubscriptionSession() {
   if (!raw) return null;
   try {
     const session = JSON.parse(raw) as SubscriptionSession;
-    if (!session.expiresAt || new Date(session.expiresAt).getTime() < Date.now()) {
+    if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
       await removeSessionStorage();
       return null;
     }

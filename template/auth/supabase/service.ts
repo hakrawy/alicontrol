@@ -396,7 +396,7 @@ export class AuthService {
 
   async logout() {
     try {
-      return await safeSupabaseOperation(async (client) => {
+      const result = await safeSupabaseOperation(async (client) => {
         const { error } = await withTimeout(
           client.auth.signOut(),
           TIMEOUT_CONFIG.AUTH_OPERATIONS,
@@ -412,9 +412,17 @@ export class AuthService {
         
         return {};
       });
+
+      await import('../../../services/subscriptions')
+        .then(({ clearSubscriptionSession }) => clearSubscriptionSession())
+        .catch(() => null);
+      return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown logout error';
       console.warn('[Template:AuthService] Logout system exception:', errorMessage);
+      await import('../../../services/subscriptions')
+        .then(({ clearSubscriptionSession }) => clearSubscriptionSession())
+        .catch(() => null);
       
       if (errorMessage.includes('timeout')) {
         return { error: 'Logout timeout, please check network and retry', errorType: 'timeout' };

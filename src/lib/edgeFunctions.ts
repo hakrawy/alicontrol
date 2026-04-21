@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '@/template';
+import { getErrorMessage } from '@/services/http';
 
 type EdgeBody = Record<string, unknown>;
 
@@ -30,25 +31,13 @@ export interface SubscriptionValidationResult {
 
 const supabase = getSupabaseClient();
 
-function normalizeFunctionError(error: any, fallback: string) {
-  if (!error) return fallback;
-  const parts = [
-    error.message,
-    error.details,
-    error.hint,
-    error.context?.body?.message,
-    error.context?.body?.error,
-  ].filter(Boolean);
-  return parts.length > 0 ? String(parts.join(': ')) : fallback;
-}
-
 export async function callFunction<T = unknown>(path: string, body: EdgeBody = {}): Promise<T> {
   const { data, error } = await supabase.functions.invoke(path, {
     body,
   });
 
   if (error) {
-    throw new Error(normalizeFunctionError(error, `Edge function "${path}" failed.`));
+    throw new Error(getErrorMessage(error, `Edge function "${path}" failed.`));
   }
 
   return data as T;

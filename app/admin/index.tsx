@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   useWindowDimensions,
-  Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +16,7 @@ import { useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
+import { fetchAdminActivity } from '../../services/adminActivity';
 import { useLocale } from '../../contexts/LocaleContext';
 
 interface StatCard {
@@ -32,6 +32,7 @@ export default function AdminDashboard() {
   const { width } = useWindowDimensions();
   const { language, direction, isRTL } = useLocale();
   const [analytics, setAnalytics] = useState<any>(null);
+  const [activity, setActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -106,8 +107,9 @@ export default function AdminDashboard() {
 
   const load = async () => {
     try {
-      const data = await api.fetchAnalytics();
+      const [data, recentActivity] = await Promise.all([api.fetchAnalytics(), fetchAdminActivity()]);
       setAnalytics(data);
+      setActivity(recentActivity);
     } catch {}
     setLoading(false);
   };
@@ -191,6 +193,41 @@ export default function AdminDashboard() {
       </View>
 
       {/* ── Management menu ────────────────────────────────────── */}
+      {activity.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>RECENT ADMIN ACTIVITY</Text>
+          <View style={styles.activityCard}>
+            {activity.slice(0, 5).map((entry) => (
+              <View key={entry.id} style={styles.activityRow}>
+                <View
+                  style={[
+                    styles.activityDot,
+                    {
+                      backgroundColor:
+                        entry.level === 'success'
+                          ? theme.success
+                          : entry.level === 'warning'
+                            ? theme.warning
+                            : entry.level === 'error'
+                              ? theme.error
+                              : theme.primary,
+                    },
+                  ]}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.activityTitle}>{entry.title}</Text>
+                  <Text style={styles.activityDetail} numberOfLines={2}>
+                    {entry.detail}
+                  </Text>
+                </View>
+                <Text style={styles.activityTime}>
+                  {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </>
+      ) : null}
       <Text style={styles.sectionTitle}>{copy.management}</Text>
       <View style={[styles.menuGrid, isWide && styles.menuGridWide]}>
         {menuItems.map((item, index) => (
@@ -299,6 +336,20 @@ const styles = StyleSheet.create({
     fontSize: 11, fontWeight: '700', color: theme.textMuted,
     letterSpacing: 1, marginBottom: 12, marginTop: 8,
   },
+  activityCard: {
+    borderRadius: 16,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    padding: 12,
+    marginBottom: 18,
+    gap: 10,
+  },
+  activityRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  activityDot: { width: 10, height: 10, borderRadius: 999, marginTop: 4 },
+  activityTitle: { color: '#FFF', fontSize: 13, fontWeight: '800' },
+  activityDetail: { color: theme.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 2 },
+  activityTime: { color: theme.textMuted, fontSize: 10, fontWeight: '700' },
   // Menu
   menuGrid: { gap: 8, marginBottom: 24 },
   menuGridWide: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between' },

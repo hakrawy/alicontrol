@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -58,19 +58,19 @@ export default function AdminAddons() {
   const [configDraft, setConfigDraft] = useState<Record<string, any>>({});
   const [rawConfigJson, setRawConfigJson] = useState('{}');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try { setAddons(await api.fetchAllAddons()); } catch (e: any) { showAlert('Error', e?.message || 'Failed to load add-ons.'); } finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, []);
+  }, [showAlert]);
+  useEffect(() => { void load(); }, [load]);
 
-  const getStatus = (addon: api.AddonRecord): Status => {
+  const getStatus = useCallback((addon: api.AddonRecord): Status => {
     if (!addon.enabled) return 'disabled';
     if ((addon.config_schema || []).some((f) => f.required && !addon.config_values?.[f.key] && addon.config_values?.[f.key] !== true)) return 'needs_config';
     const status = reports[addon.id]?.status;
     if (status === 'warning' || status === 'error' || status === 'needs_config') return status;
     return 'healthy';
-  };
+  }, [reports]);
 
   const visibleAddons = useMemo(() => addons.filter((addon) => {
     const kind = api.inferAddonKind(addon);
@@ -79,7 +79,7 @@ export default function AdminAddons() {
     return (!search.trim() || haystack.includes(search.trim().toLowerCase()))
       && (kindFilter === 'all' || kind === kindFilter)
       && (statusFilter === 'all' || status === statusFilter);
-  }), [addons, search, kindFilter, statusFilter, reports]);
+  }), [addons, search, kindFilter, statusFilter, getStatus]);
 
   const inspect = async (mode: 'read' | 'test' | 'save') => {
     if (!manifestUrl.trim()) return showAlert('Missing URL', 'Paste a manifest.json URL first.');
