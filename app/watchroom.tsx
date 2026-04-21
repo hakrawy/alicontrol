@@ -46,9 +46,15 @@ export default function WatchRoomScreen() {
   const [realtimeStatus, setRealtimeStatus] = useState<WatchRoomRealtimeStatus>('idle');
   const [roomPresence, setRoomPresence] = useState<RoomPresenceMember[]>([]);
   const [roomRoles, setRoomRoles] = useState<api.RoomRole[]>([]);
-  const [roomBans, setRoomBans] = useState<any[]>([]);
+  const [roomBans, setRoomBans] = useState<api.RoomBan[]>([]);
+  const [roomPolls, setRoomPolls] = useState<api.RoomPoll[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [recentReactions, setRecentReactions] = useState<{ emoji: string; username: string; id: string }[]>([]);
+  const [moderationPanelOpen, setModerationPanelOpen] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptionsText, setPollOptionsText] = useState('');
+  const [roomActionLoading, setRoomActionLoading] = useState(false);
   const chatScrollRef = useRef<ScrollView>(null);
   const realtimeRef = useRef<ReturnType<typeof startWatchRoomRealtime> | null>(null);
   const realtimeStatusRef = useRef<WatchRoomRealtimeStatus>('idle');
@@ -193,6 +199,37 @@ export default function WatchRoomScreen() {
     } : current));
   }, []);
 
+  const normalizePresenceRows = useCallback((presence: any[]) => (
+    presence.map((entry) => ({
+      userId: entry.user_id,
+      username: entry.user?.username || 'User',
+      avatar: entry.user?.avatar || null,
+      role: entry.role,
+      joinedAt: entry.joined_at,
+      lastSeenAt: entry.last_seen_at,
+    }))
+  ), []);
+
+  const loadRoomSessionState = useCallback(async (targetRoomId: string) => {
+    try {
+      const [roles, presence, bans, polls] = await Promise.all([
+        api.fetchRoomRoles(targetRoomId),
+        api.fetchRoomPresence(targetRoomId),
+        api.fetchRoomBans(targetRoomId),
+        api.fetchRoomPolls(targetRoomId),
+      ]);
+      setRoomRoles(roles);
+      setRoomPresence(normalizePresenceRows(presence));
+      setRoomBans(bans);
+      setRoomPolls(polls);
+    } catch {
+      setRoomRoles([]);
+      setRoomPresence([]);
+      setRoomBans([]);
+      setRoomPolls([]);
+    }
+  }, [normalizePresenceRows]);
+
   const currentUserRole = useMemo(() => {
     if (!selectedRoom || !user?.id) return 'member';
     if (isAdmin || selectedRoom.host_id === user.id) return 'host';
@@ -203,6 +240,7 @@ export default function WatchRoomScreen() {
 
   const canModerateRoom = currentUserRole === 'host' || currentUserRole === 'co-host' || currentUserRole === 'moderator' || isAdmin;
   const canChangeContent = currentUserRole === 'host' || currentUserRole === 'co-host' || isAdmin;
+  const selectedMember = selectedMemberId ? roomPresence.find((member) => member.userId === selectedMemberId) || null : null;
 
   useEffect(() => {
     if (!selectedRoom || !user?.id) return;
@@ -296,26 +334,7 @@ export default function WatchRoomScreen() {
     };
 
     void loadInitialMessages();
-    void api.fetchRoomRoles(roomId).then((roles) => {
-      if (!cancelled) setRoomRoles(roles);
-    }).catch(() => undefined);
-    void api.fetchRoomPresence(roomId).then((presence) => {
-      if (!cancelled) {
-        setRoomPresence(
-          presence.map((entry) => ({
-            userId: entry.user_id,
-            username: entry.user?.username || 'User',
-            avatar: entry.user?.avatar || null,
-            role: entry.role,
-            joinedAt: entry.joined_at,
-            lastSeenAt: entry.last_seen_at,
-          }))
-        );
-      }
-    }).catch(() => undefined);
-    void api.fetchRoomBans(roomId).then((bans) => {
-      if (!cancelled) setRoomBans(bans);
-    }).catch(() => undefined);
+    void loadRoomSessionState(roomId).catch(() => undefined);
     void api.fetchRoomEvents(roomId).then((events) => {
       const lastContentChange = [...events].reverse().find((event) => event.event_type === 'content_change');
       if (!lastContentChange || !lastContentChange.payload || typeof lastContentChange.payload !== 'object' || cancelled) return;
@@ -341,26 +360,17 @@ export default function WatchRoomScreen() {
       onRoomUpdate: (room) => {
         setSelectedRoom((current) => (current?.id === room.id ? { ...current, ...room } : current));
       },
-      onPresence: setRoomPresence,
+      onPresence: (presence) => {
+        if (!cancelled) {
+          setRoomPresence(presence);
+        }
+      },
       onPlaybackEvent: (event) => {
         if (event.event_type === 'content_change') {
           applyRoomContentPayload(event.payload);
         }
         if (event.event_type === 'join' || event.event_type === 'leave') {
-          void api.fetchRoomPresence(roomId).then((presence) => {
-            if (!cancelled) {
-              setRoomPresence(
-                presence.map((entry) => ({
-                  userId: entry.user_id,
-                  username: entry.user?.username || 'User',
-                  avatar: entry.user?.avatar || null,
-                  role: entry.role,
-                  joinedAt: entry.joined_at,
-                  lastSeenAt: entry.last_seen_at,
-                }))
-              );
-            }
-          }).catch(() => undefined);
+          void loadRoomSessionState(roomId).catch(() => undefined);
         }
         if (event.event_type === 'reaction') {
           const emoji = String(event.payload?.emoji || '🎉');
@@ -395,6 +405,9 @@ export default function WatchRoomScreen() {
             setRecentReactions((current) => current.filter((item) => item.id !== reactionId));
           }, 2200);
         }
+        if (event.event_type === 'poll_created' || event.event_type === 'poll_closed' || event.event_type === 'poll_vote' || event.event_type === 'role_update' || event.event_type === 'room_lock' || event.event_type === 'moderation_action') {
+          void loadRoomSessionState(roomId).catch(() => undefined);
+        }
       },
     });
 
@@ -418,7 +431,7 @@ export default function WatchRoomScreen() {
         realtimeRef.current = null;
       }
     };
-  }, [joinedRoom, roomId, user, mergeMessages, applyRoomContentPayload]);
+  }, [joinedRoom, roomId, user, mergeMessages, applyRoomContentPayload, loadRoomSessionState]);
 
   const handleJoinRoom = async (room: WatchRoom) => {
     if (!user?.id) return;
@@ -427,6 +440,10 @@ export default function WatchRoomScreen() {
       const activeBan = roomBans.find((ban) => ban.room_id === room.id && ban.user_id === user.id);
       if (activeBan) {
         showAlert(copy.error, 'You are banned from this room.');
+        return;
+      }
+      if (room.is_locked && room.host_id !== user.id && !isAdmin) {
+        showAlert(copy.error, 'This room is locked by the host.');
         return;
       }
       await api.joinWatchRoom(room.id, user.id);
@@ -450,8 +467,13 @@ export default function WatchRoomScreen() {
     setRoomPresence([]);
     setRoomRoles([]);
     setRoomBans([]);
+    setRoomPolls([]);
     setTypingUsers([]);
     setRecentReactions([]);
+    setModerationPanelOpen(false);
+    setSelectedMemberId(null);
+    setPollQuestion('');
+    setPollOptionsText('');
     setRealtimeStatus('idle');
     loadRooms();
   };
@@ -472,8 +494,13 @@ export default function WatchRoomScreen() {
                 setRoomPresence([]);
                 setRoomRoles([]);
                 setRoomBans([]);
+                setRoomPolls([]);
                 setTypingUsers([]);
                 setRecentReactions([]);
+                setModerationPanelOpen(false);
+                setSelectedMemberId(null);
+                setPollQuestion('');
+                setPollOptionsText('');
                 setRealtimeStatus('idle');
                 if (realtimeRef.current) {
                   await realtimeRef.current.cleanup().catch(() => undefined);
@@ -674,6 +701,226 @@ export default function WatchRoomScreen() {
     }
   };
 
+  const refreshRoomData = useCallback(async () => {
+    if (!selectedRoom?.id) return;
+    await loadRoomSessionState(selectedRoom.id);
+  }, [loadRoomSessionState, selectedRoom?.id]);
+
+  const handleToggleRoomLock = async () => {
+    if (!selectedRoom || !canModerateRoom) return;
+    setRoomActionLoading(true);
+    try {
+      const nextLocked = !selectedRoom.is_locked;
+      await api.setWatchRoomLock(selectedRoom.id, nextLocked);
+      setSelectedRoom((current) => (current ? { ...current, is_locked: nextLocked } : current));
+      await refreshRoomData();
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to update room lock.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleRoleUpdate = async (memberId: string, role: 'co-host' | 'moderator' | 'member') => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.setRoomRole(selectedRoom.id, memberId, role, user.id);
+      await refreshRoomData();
+      await realtimeRef.current?.sendControlEvent({
+        id: `role_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'role_update',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { memberId, role },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to update room role.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleMuteMember = async (memberId: string, minutes = 10) => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.muteWatchRoomMember(selectedRoom.id, memberId, user.id, 'Muted by host', minutes);
+      await refreshRoomData();
+      await realtimeRef.current?.sendControlEvent({
+        id: `mute_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'moderation_action',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { memberId, action: 'mute', minutes },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to mute member.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleKickMember = async (memberId: string) => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.kickWatchRoomMember(selectedRoom.id, memberId);
+      await refreshRoomData();
+      await realtimeRef.current?.sendControlEvent({
+        id: `kick_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'moderation_action',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { memberId, action: 'kick' },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to kick member.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleBanMember = async (memberId: string) => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.banWatchRoomMember(selectedRoom.id, memberId, user.id, 'Banned by host');
+      await refreshRoomData();
+      await realtimeRef.current?.sendControlEvent({
+        id: `ban_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'moderation_action',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { memberId, action: 'ban' },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to ban member.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleCreatePoll = async () => {
+    if (!selectedRoom || !user?.id) return;
+    const options = pollOptionsText
+      .split(/\n|,/)
+      .map((option) => option.trim())
+      .filter(Boolean);
+    if (!pollQuestion.trim() || options.length < 2) {
+      showAlert(copy.error, 'Polls need a question and at least two options.');
+      return;
+    }
+
+    setRoomActionLoading(true);
+    try {
+      const poll = await api.createRoomPoll(selectedRoom.id, user.id, pollQuestion, options);
+      setRoomPolls((current) => [poll, ...current]);
+      setPollQuestion('');
+      setPollOptionsText('');
+      await realtimeRef.current?.sendControlEvent({
+        id: `poll_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'poll_created',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { poll },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to create poll.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleVotePoll = async (pollId: string, optionIndex: number) => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.voteRoomPoll(selectedRoom.id, pollId, user.id, optionIndex);
+      await refreshRoomData();
+      await realtimeRef.current?.sendControlEvent({
+        id: `vote_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'poll_vote',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { pollId, optionIndex },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to vote on poll.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
+  const handleClosePoll = async (pollId: string) => {
+    if (!selectedRoom || !user?.id) return;
+    setRoomActionLoading(true);
+    try {
+      await api.closeRoomPoll(selectedRoom.id, pollId);
+      setRoomPolls((current) => current.map((poll) => (poll.id === pollId ? { ...poll, is_open: false } : poll)));
+      await realtimeRef.current?.sendControlEvent({
+        id: `closepoll_${Date.now()}`,
+        room_id: selectedRoom.id,
+        actor_id: user.id,
+        event_type: 'poll_closed',
+        media_id: null,
+        media_type: null,
+        position_ms: 0,
+        playback_rate: 1,
+        payload: { pollId },
+        sequence_no: 0,
+        server_ts: new Date().toISOString(),
+        client_ts: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      showAlert(copy.error, err.message || 'Failed to close poll.');
+    } finally {
+      setRoomActionLoading(false);
+    }
+  };
+
   if (joinedRoom && selectedRoom) {
     return (
       <View style={[styles.container, { backgroundColor: theme.background, direction }]}>
@@ -715,10 +962,25 @@ export default function WatchRoomScreen() {
                   {currentUserRole === 'host' ? 'Host' : currentUserRole === 'co-host' ? 'Co-host' : currentUserRole === 'moderator' ? 'Moderator' : 'Member'}
                 </Text>
               </View>
+              {selectedRoom.is_locked ? (
+                <View style={styles.lockBadge}>
+                  <MaterialIcons name="lock" size={12} color="#FFF" />
+                  <Text style={styles.lockBadgeText}>Locked</Text>
+                </View>
+              ) : null}
               {(selectedContent && canChangeContent && selectedContent.id !== selectedRoom.content_id) ? (
                 <Pressable style={styles.updateRoomContentBtn} onPress={handleApplySelectedContentToRoom}>
                   <MaterialIcons name="swap-horiz" size={16} color="#FFF" />
                   <Text style={styles.updateRoomContentText}>{copy.updateRoomContent}</Text>
+                </Pressable>
+              ) : null}
+              {canModerateRoom ? (
+                <Pressable
+                  style={[styles.roomManageBtn, roomActionLoading ? styles.roomManageBtnBusy : null]}
+                  onPress={() => setModerationPanelOpen((current) => !current)}
+                >
+                  <MaterialIcons name="admin-panel-settings" size={16} color="#FFF" />
+                  <Text style={styles.roomManageText}>{moderationPanelOpen ? 'Hide tools' : 'Manage room'}</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -772,6 +1034,158 @@ export default function WatchRoomScreen() {
                     <Text style={styles.recentReactionText}>{reaction.username}</Text>
                   </View>
                 ))}
+              </View>
+            ) : null}
+
+            {moderationPanelOpen && canModerateRoom ? (
+              <View style={styles.moderationPanel}>
+                <View style={[styles.moderationHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                  <Text style={styles.moderationTitle}>Room tools</Text>
+                  <Pressable
+                    style={[styles.moderationLockBtn, selectedRoom.is_locked ? styles.moderationLockActive : null]}
+                    onPress={handleToggleRoomLock}
+                    disabled={roomActionLoading}
+                  >
+                    <MaterialIcons name={selectedRoom.is_locked ? 'lock' : 'lock-open'} size={16} color="#FFF" />
+                    <Text style={styles.moderationLockText}>{selectedRoom.is_locked ? 'Unlock room' : 'Lock room'}</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.pollComposer}>
+                  <Text style={styles.moderationSectionLabel}>Create poll</Text>
+                  <TextInput
+                    style={styles.moderationInput}
+                    placeholder="Poll question"
+                    placeholderTextColor={theme.textMuted}
+                    value={pollQuestion}
+                    onChangeText={setPollQuestion}
+                  />
+                  <TextInput
+                    style={[styles.moderationInput, styles.moderationTextarea]}
+                    placeholder="Options separated by commas or new lines"
+                    placeholderTextColor={theme.textMuted}
+                    value={pollOptionsText}
+                    onChangeText={setPollOptionsText}
+                    multiline
+                  />
+                  <Pressable style={styles.moderationPrimaryBtn} onPress={handleCreatePoll} disabled={roomActionLoading}>
+                    <Text style={styles.moderationPrimaryText}>Create poll</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.moderationSection}>
+                  <Text style={styles.moderationSectionLabel}>Members</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.memberStrip}>
+                    {roomPresence.map((member) => {
+                      const memberRole = roomRoles.find((role) => role.user_id === member.userId)?.role || member.role || 'member';
+                      const isSelected = selectedMemberId === member.userId;
+                      return (
+                        <Pressable
+                          key={member.userId}
+                          style={[styles.memberPill, isSelected ? styles.memberPillActive : null]}
+                          onPress={() => setSelectedMemberId((current) => (current === member.userId ? null : member.userId))}
+                        >
+                          <Text style={styles.memberPillName} numberOfLines={1}>{member.username}</Text>
+                          <Text style={styles.memberPillRole}>{memberRole}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {selectedMember ? (
+                  <View style={styles.memberActionCard}>
+                    <View style={[styles.memberActionHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                      <View>
+                        <Text style={styles.memberActionTitle}>{selectedMember.username}</Text>
+                        <Text style={styles.memberActionSubtitle}>Selected member</Text>
+                      </View>
+                      <Pressable style={styles.memberActionClearBtn} onPress={() => setSelectedMemberId(null)}>
+                        <MaterialIcons name="close" size={16} color={theme.textSecondary} />
+                      </Pressable>
+                    </View>
+                    <View style={styles.memberActionRow}>
+                      <Pressable style={styles.memberActionBtn} onPress={() => handleRoleUpdate(selectedMember.userId, 'co-host')} disabled={roomActionLoading}>
+                        <Text style={styles.memberActionBtnText}>Co-host</Text>
+                      </Pressable>
+                      <Pressable style={styles.memberActionBtn} onPress={() => handleRoleUpdate(selectedMember.userId, 'moderator')} disabled={roomActionLoading}>
+                        <Text style={styles.memberActionBtnText}>Moderator</Text>
+                      </Pressable>
+                      <Pressable style={styles.memberActionBtn} onPress={() => handleMuteMember(selectedMember.userId, 10)} disabled={roomActionLoading}>
+                        <Text style={styles.memberActionBtnText}>Mute 10m</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.memberActionRow}>
+                      <Pressable style={[styles.memberActionBtn, styles.memberActionDangerBtn]} onPress={() => handleKickMember(selectedMember.userId)} disabled={roomActionLoading}>
+                        <Text style={styles.memberActionDangerText}>Kick</Text>
+                      </Pressable>
+                      <Pressable style={[styles.memberActionBtn, styles.memberActionDangerBtn]} onPress={() => handleBanMember(selectedMember.userId)} disabled={roomActionLoading}>
+                        <Text style={styles.memberActionDangerText}>Ban</Text>
+                      </Pressable>
+                      {roomBans.some((ban) => ban.user_id === selectedMember.userId && ban.is_active) ? (
+                        <Pressable
+                          style={styles.memberActionBtn}
+                          onPress={async () => {
+                            if (!selectedRoom || !user?.id) return;
+                            setRoomActionLoading(true);
+                            try {
+                              await api.unbanWatchRoomMember(selectedRoom.id, selectedMember.userId);
+                              await refreshRoomData();
+                            } catch (err: any) {
+                              showAlert(copy.error, err.message || 'Failed to unban member.');
+                            } finally {
+                              setRoomActionLoading(false);
+                            }
+                          }}
+                          disabled={roomActionLoading}
+                        >
+                          <Text style={styles.memberActionBtnText}>Unban</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.pollList}>
+                  {roomPolls.map((poll) => {
+                    const userVote = poll.votes?.find((vote) => vote.user_id === user?.id);
+                    return (
+                      <View key={poll.id} style={styles.pollCard}>
+                        <View style={[styles.pollHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.pollQuestion}>{poll.question}</Text>
+                            <Text style={styles.pollMeta}>{poll.total_votes || 0} votes</Text>
+                          </View>
+                          {canModerateRoom && poll.is_open ? (
+                            <Pressable style={styles.pollCloseBtn} onPress={() => handleClosePoll(poll.id)} disabled={roomActionLoading}>
+                              <Text style={styles.pollCloseText}>Close</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                        <View style={styles.pollOptions}>
+                          {poll.options.map((option, index) => {
+                            const count = poll.vote_counts?.[index] || 0;
+                            const votedHere = userVote?.option_index === index;
+                            return (
+                              <Pressable
+                                key={`${poll.id}_${index}`}
+                                style={[styles.pollOption, votedHere ? styles.pollOptionActive : null]}
+                                onPress={() => handleVotePoll(poll.id, index)}
+                                disabled={!poll.is_open || roomActionLoading}
+                              >
+                                <Text style={styles.pollOptionText}>{option}</Text>
+                                <Text style={styles.pollOptionCount}>{count}</Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    );
+                  })}
+                  {roomPolls.length === 0 ? (
+                    <Text style={styles.emptyPollText}>No active polls yet.</Text>
+                  ) : null}
+                </View>
               </View>
             ) : null}
 
@@ -851,15 +1265,21 @@ export default function WatchRoomScreen() {
                     <Text style={styles.roomListName} numberOfLines={1}>{room.name}</Text>
                     <Text style={styles.roomListContent} numberOfLines={1}>{room.content_title}</Text>
                     <Text style={styles.roomListCode}>{copy.code}: {room.room_code}</Text>
-                    <View style={[styles.roomListBottom, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                      <View style={[styles.roomListParticipants, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                        <MaterialIcons name="people" size={14} color={theme.primary} />
-                        <Text style={styles.roomListParticipantText}>{room.member_count || 0}/{room.max_participants}</Text>
-                      </View>
-                      <View style={[styles.roomPrivacyBadge, room.privacy === 'public' ? styles.privacyPublic : styles.privacyPrivate, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                        <MaterialIcons name={room.privacy === 'public' ? 'public' : 'lock'} size={12} color={room.privacy === 'public' ? theme.success : theme.warning} />
-                        <Text style={{ fontSize: 10, fontWeight: '600', color: room.privacy === 'public' ? theme.success : theme.warning }}>{room.privacy === 'public' ? copy.public : copy.private}</Text>
-                      </View>
+                      <View style={[styles.roomListBottom, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                        <View style={[styles.roomListParticipants, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                          <MaterialIcons name="people" size={14} color={theme.primary} />
+                          <Text style={styles.roomListParticipantText}>{room.member_count || 0}/{room.max_participants}</Text>
+                        </View>
+                        {room.is_locked ? (
+                          <View style={[styles.roomPrivacyBadge, styles.privacyLocked, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                            <MaterialIcons name="lock" size={12} color={theme.warning} />
+                            <Text style={{ fontSize: 10, fontWeight: '600', color: theme.warning }}>Locked</Text>
+                          </View>
+                        ) : null}
+                        <View style={[styles.roomPrivacyBadge, room.privacy === 'public' ? styles.privacyPublic : styles.privacyPrivate, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                          <MaterialIcons name={room.privacy === 'public' ? 'public' : 'lock'} size={12} color={room.privacy === 'public' ? theme.success : theme.warning} />
+                          <Text style={{ fontSize: 10, fontWeight: '600', color: room.privacy === 'public' ? theme.success : theme.warning }}>{room.privacy === 'public' ? copy.public : copy.private}</Text>
+                        </View>
                     </View>
                   </View>
                   <View style={styles.roomListActions}>
@@ -919,6 +1339,7 @@ const styles = StyleSheet.create({
   roomPrivacyBadge: { alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
   privacyPublic: { backgroundColor: 'rgba(16,185,129,0.12)' },
   privacyPrivate: { backgroundColor: 'rgba(245,158,11,0.12)' },
+  privacyLocked: { backgroundColor: 'rgba(245,158,11,0.16)' },
   roomListActions: { alignItems: 'center', gap: 10 },
   inlineDeleteBtn: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(239,68,68,0.12)' },
   joinBtn: { backgroundColor: theme.primary, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10 },
@@ -938,6 +1359,8 @@ const styles = StyleSheet.create({
   roleBadgePower: { backgroundColor: 'rgba(59,130,246,0.88)' },
   roleBadgeMember: { backgroundColor: 'rgba(75,85,99,0.88)' },
   roleBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+  lockBadge: { position: 'absolute', top: 44, right: 12, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(245,158,11,0.88)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  lockBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
   updateRoomContentBtn: {
     position: 'absolute',
     right: 12,
@@ -951,6 +1374,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   updateRoomContentText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  roomManageBtn: { position: 'absolute', left: 12, bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(15,118,110,0.9)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
+  roomManageBtnBusy: { opacity: 0.7 },
+  roomManageText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   reactionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.border },
   reactionBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.surface, alignItems: 'center', justifyContent: 'center' },
   reactionEmoji: { fontSize: 20 },
@@ -960,6 +1386,47 @@ const styles = StyleSheet.create({
   recentReactionPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(99,102,241,0.16)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   recentReactionEmoji: { fontSize: 14 },
   recentReactionText: { fontSize: 11, color: '#FFF', fontWeight: '700' },
+  moderationPanel: { marginHorizontal: 12, marginBottom: 10, padding: 12, borderRadius: 16, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, gap: 12 },
+  moderationHeader: { alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  moderationTitle: { fontSize: 16, fontWeight: '800', color: '#FFF' },
+  moderationLockBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.surfaceLight, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
+  moderationLockActive: { backgroundColor: 'rgba(245,158,11,0.9)' },
+  moderationLockText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  moderationSection: { gap: 10 },
+  moderationSectionLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 0.6, color: theme.textSecondary, textTransform: 'uppercase' },
+  pollComposer: { gap: 10 },
+  moderationInput: { minHeight: 44, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: theme.backgroundSecondary, borderWidth: 1, borderColor: theme.border, color: '#FFF', fontSize: 14 },
+  moderationTextarea: { minHeight: 72, textAlignVertical: 'top' },
+  moderationPrimaryBtn: { height: 44, borderRadius: 12, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center' },
+  moderationPrimaryText: { fontSize: 14, fontWeight: '800', color: '#FFF' },
+  memberStrip: { gap: 8, paddingVertical: 4 },
+  memberPill: { minWidth: 120, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, backgroundColor: theme.backgroundSecondary, borderWidth: 1, borderColor: theme.border, gap: 2 },
+  memberPillActive: { borderColor: theme.primary, backgroundColor: 'rgba(59,130,246,0.16)' },
+  memberPillName: { fontSize: 13, fontWeight: '800', color: '#FFF' },
+  memberPillRole: { fontSize: 11, color: theme.textSecondary, fontWeight: '600', textTransform: 'capitalize' },
+  memberActionCard: { borderRadius: 14, padding: 12, backgroundColor: theme.backgroundSecondary, borderWidth: 1, borderColor: theme.border, gap: 10 },
+  memberActionHeader: { alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  memberActionTitle: { fontSize: 15, fontWeight: '800', color: '#FFF' },
+  memberActionSubtitle: { fontSize: 12, color: theme.textSecondary },
+  memberActionClearBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface },
+  memberActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  memberActionBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
+  memberActionBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  memberActionDangerBtn: { backgroundColor: 'rgba(239,68,68,0.14)', borderColor: 'rgba(239,68,68,0.3)' },
+  memberActionDangerText: { fontSize: 12, fontWeight: '700', color: theme.error },
+  pollList: { gap: 10 },
+  pollCard: { gap: 10, borderRadius: 14, padding: 12, backgroundColor: theme.backgroundSecondary, borderWidth: 1, borderColor: theme.border },
+  pollHeader: { alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  pollQuestion: { fontSize: 15, fontWeight: '800', color: '#FFF' },
+  pollMeta: { marginTop: 2, fontSize: 11, color: theme.textSecondary },
+  pollCloseBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: 'rgba(239,68,68,0.14)' },
+  pollCloseText: { fontSize: 12, fontWeight: '800', color: theme.error },
+  pollOptions: { gap: 8 },
+  pollOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border },
+  pollOptionActive: { borderColor: theme.primary, backgroundColor: 'rgba(59,130,246,0.16)' },
+  pollOptionText: { flex: 1, fontSize: 13, color: '#FFF', fontWeight: '700' },
+  pollOptionCount: { fontSize: 12, color: theme.textSecondary, fontWeight: '700' },
+  emptyPollText: { color: theme.textSecondary, textAlign: 'center', paddingVertical: 8, fontSize: 13 },
   chatContainer: { flex: 1, backgroundColor: theme.backgroundSecondary },
   chatMsg: { gap: 10 },
   chatAvatarFallback: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.primary, alignItems: 'center', justifyContent: 'center' },

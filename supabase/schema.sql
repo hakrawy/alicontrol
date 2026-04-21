@@ -217,6 +217,7 @@ create table if not exists public.watch_rooms (
   content_title text not null,
   content_poster text not null default '',
   privacy text not null default 'public' check (privacy in ('public', 'private', 'invite')),
+  is_locked boolean not null default false,
   max_participants integer not null default 10,
   is_active boolean not null default true,
   playback_time integer not null default 0,
@@ -504,11 +505,32 @@ create policy "watch_room_members_read"
   on public.watch_room_members for select
   using (true);
 
-drop policy if exists "watch_room_members_own_all" on public.watch_room_members;
-create policy "watch_room_members_own_all"
-  on public.watch_room_members for all
-  using (auth.uid() = user_id or public.is_admin())
-  with check (auth.uid() = user_id or public.is_admin());
+drop policy if exists "watch_room_members_insert_own_open" on public.watch_room_members;
+create policy "watch_room_members_insert_own_open"
+  on public.watch_room_members for insert
+  with check (
+    (auth.uid() = user_id or public.is_admin())
+    and exists (
+      select 1
+      from public.watch_rooms wr
+      where wr.id = watch_room_members.room_id
+        and (wr.is_active = true or wr.host_id = auth.uid() or public.is_admin())
+        and (wr.is_locked = false or wr.host_id = auth.uid() or public.is_admin())
+    )
+    and not exists (
+      select 1
+      from public.room_bans rb
+      where rb.room_id = watch_room_members.room_id
+        and rb.user_id = auth.uid()
+        and rb.is_active = true
+        and (rb.expires_at is null or rb.expires_at > now())
+    )
+  );
+
+drop policy if exists "watch_room_members_delete_own" on public.watch_room_members;
+create policy "watch_room_members_delete_own"
+  on public.watch_room_members for delete
+  using (auth.uid() = user_id or public.is_admin());
 
 drop policy if exists "room_messages_read" on public.room_messages;
 create policy "room_messages_read"

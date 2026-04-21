@@ -15,7 +15,13 @@ export type RoomPlaybackEventType =
   | 'typing'
   | 'reaction'
   | 'join'
-  | 'leave';
+  | 'leave'
+  | 'poll_created'
+  | 'poll_closed'
+  | 'poll_vote'
+  | 'role_update'
+  | 'room_lock'
+  | 'moderation_action';
 
 export interface RoomPlaybackEvent {
   id: string;

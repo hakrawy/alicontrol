@@ -392,6 +392,7 @@ export interface WatchRoom {
   content_title: string;
   content_poster: string;
   privacy: 'public' | 'private' | 'invite';
+  is_locked?: boolean;
   max_participants: number;
   is_active: boolean;
   playback_time: number;
@@ -412,6 +413,40 @@ export interface RoomMessage {
   message: string;
   created_at: string;
   user?: { username: string; avatar: string };
+}
+
+export interface RoomBan {
+  id: string;
+  room_id: string;
+  user_id: string;
+  banned_by?: string | null;
+  reason?: string;
+  banned_at: string;
+  expires_at?: string | null;
+  is_active: boolean;
+  user?: { username: string; avatar: string; email?: string };
+}
+
+export interface RoomPollVote {
+  poll_id: string;
+  room_id: string;
+  user_id: string;
+  option_index: number;
+  created_at: string;
+}
+
+export interface RoomPoll {
+  id: string;
+  room_id: string;
+  created_by: string;
+  question: string;
+  options: string[];
+  is_open: boolean;
+  created_at: string;
+  closed_at?: string | null;
+  votes?: RoomPollVote[];
+  vote_counts?: number[];
+  total_votes?: number;
 }
 
 export interface RoomEvent {
@@ -2792,6 +2827,7 @@ export async function createWatchRoom(room: {
   content_title: string;
   content_poster: string;
   privacy: string;
+  is_locked?: boolean;
   max_participants: number;
   stream_url?: string;
   stream_sources?: StreamSource[];
@@ -2803,6 +2839,7 @@ export async function createWatchRoom(room: {
     supabase.from('watch_rooms').insert({
       ...room,
       room_code,
+      is_locked: room.is_locked ?? false,
       stream_sources: room.stream_sources || [],
     }).select().single(),
     'Failed to create watch room.'
@@ -2834,6 +2871,20 @@ export async function createWatchRoom(room: {
 }
 
 export async function joinWatchRoom(roomId: string, userId: string) {
+  const room = await readSupabaseRow<any>(
+    supabase.from('watch_rooms').select('id, host_id, is_locked, is_active').eq('id', roomId).maybeSingle(),
+    'Failed to load watch room.'
+  ).catch(() => null);
+  const activeBan = await readSupabaseRow<any>(
+    supabase.from('room_bans').select('id').eq('room_id', roomId).eq('user_id', userId).eq('is_active', true).maybeSingle(),
+    'Failed to verify room bans.'
+  ).catch(() => null);
+  if (activeBan) {
+    throw new Error('You are banned from this room.');
+  }
+  if (room?.is_locked && room?.host_id !== userId) {
+    throw new Error('This room is locked by the host.');
+  }
   await writeSupabaseMutation(
     supabase.from('watch_room_members').upsert({ room_id: roomId, user_id: userId }, { onConflict: 'room_id,user_id' }),
     'Failed to join watch room.'
@@ -2853,6 +2904,120 @@ export async function leaveWatchRoom(roomId: string, userId: string) {
   await writeSupabaseMutation(
     supabase.from('room_presence').delete().eq('room_id', roomId).eq('user_id', userId),
     'Failed to leave room presence.'
+  ).catch(() => null);
+}
+
+export async function setWatchRoomLock(roomId: string, isLocked: boolean) {
+  await writeSupabaseMutation(
+    supabase.from('watch_rooms').update({ is_locked: isLocked, updated_at: new Date().toISOString() }).eq('id', roomId),
+    'Failed to update room lock.'
+  );
+}
+
+export async function kickWatchRoomMember(roomId: string, userId: string) {
+  await writeSupabaseMutation(
+    supabase.from('watch_room_members').delete().eq('room_id', roomId).eq('user_id', userId),
+    'Failed to kick room member.'
+  );
+  await writeSupabaseMutation(
+    supabase.from('room_presence').delete().eq('room_id', roomId).eq('user_id', userId),
+    'Failed to clear room presence.'
+  ).catch(() => null);
+}
+
+export async function banWatchRoomMember(roomId: string, userId: string, bannedBy: string, reason = '', expiresAt?: string | null) {
+  const existing = await readSupabaseRow<any>(
+    supabase.from('room_bans').select('id').eq('room_id', roomId).eq('user_id', userId).eq('is_active', true).maybeSingle(),
+    'Failed to check existing room ban.'
+  ).catch(() => null);
+
+  if (existing?.id) {
+    await writeSupabaseMutation(
+      supabase.from('room_bans').update({
+        banned_by: bannedBy,
+        reason,
+        banned_at: new Date().toISOString(),
+        expires_at: expiresAt || null,
+        is_active: true,
+      }).eq('id', existing.id),
+      'Failed to update room ban.'
+    );
+  } else {
+    await writeSupabaseMutation(
+      supabase.from('room_bans').insert({
+        room_id: roomId,
+        user_id: userId,
+        banned_by: bannedBy,
+        reason,
+        banned_at: new Date().toISOString(),
+        expires_at: expiresAt || null,
+        is_active: true,
+      }),
+      'Failed to create room ban.'
+    );
+  }
+
+  await kickWatchRoomMember(roomId, userId).catch(() => null);
+}
+
+export async function unbanWatchRoomMember(roomId: string, userId: string) {
+  await writeSupabaseMutation(
+    supabase.from('room_bans').update({ is_active: false }).eq('room_id', roomId).eq('user_id', userId).eq('is_active', true),
+    'Failed to remove room ban.'
+  );
+}
+
+export async function muteWatchRoomMember(roomId: string, userId: string, mutedBy: string, reason = '', minutes = 10) {
+  const current = await readSupabaseRow<any>(
+    supabase.from('room_presence').select('room_id, user_id, role, state, joined_at, last_seen_at').eq('room_id', roomId).eq('user_id', userId).maybeSingle(),
+    'Failed to load room presence.'
+  ).catch(() => null);
+  const nextState = {
+    ...(current?.state || {}),
+    muted_until: new Date(Date.now() + Math.max(1, minutes) * 60_000).toISOString(),
+    muted_by: mutedBy,
+    muted_reason: reason,
+  };
+
+  await writeSupabaseMutation(
+    supabase.from('room_presence').upsert({
+      room_id: roomId,
+      user_id: userId,
+      role: current?.role || 'member',
+      state: nextState,
+      joined_at: current?.joined_at || new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+    }, { onConflict: 'room_id,user_id' }),
+    'Failed to mute room member.'
+  );
+}
+
+export async function setRoomRole(
+  roomId: string,
+  userId: string,
+  role: 'host' | 'co-host' | 'moderator' | 'member',
+  grantedBy?: string | null
+) {
+  await writeSupabaseMutation(
+    supabase.from('room_roles').upsert({
+      room_id: roomId,
+      user_id: userId,
+      role,
+      granted_by: grantedBy || null,
+      granted_at: new Date().toISOString(),
+    }, { onConflict: 'room_id,user_id' }),
+    'Failed to update room role.'
+  );
+  await writeSupabaseMutation(
+    supabase.from('room_presence').upsert({
+      room_id: roomId,
+      user_id: userId,
+      role,
+      state: {},
+      joined_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+    }, { onConflict: 'room_id,user_id' }),
+    'Failed to sync room presence role.'
   ).catch(() => null);
 }
 
@@ -2912,15 +3077,79 @@ export async function fetchRoomPresence(roomId: string) {
 }
 
 export async function fetchRoomBans(roomId: string) {
-  return readSupabaseRows<any>(
+  return readSupabaseRows<RoomBan>(
     supabase
       .from('room_bans')
-      .select('*')
+      .select('*, user:user_profiles!room_bans_user_id_fkey(username, avatar, email)')
       .eq('room_id', roomId)
       .eq('is_active', true)
       .order('banned_at', { ascending: false }),
     [],
     'Failed to fetch room bans.'
+  );
+}
+
+export async function fetchRoomPolls(roomId: string) {
+  const polls = await readSupabaseRows<any>(
+    supabase.from('room_polls').select('*').eq('room_id', roomId).order('created_at', { ascending: false }),
+    [],
+    'Failed to fetch room polls.'
+  );
+  const votes = await readSupabaseRows<RoomPollVote>(
+    supabase.from('room_poll_votes').select('*').eq('room_id', roomId),
+    [],
+    'Failed to fetch room poll votes.'
+  );
+
+  return polls.map((poll) => {
+    const options = Array.isArray(poll.options) ? poll.options.map((option: unknown) => String(option)) : [];
+    const pollVotes = votes.filter((vote) => vote.poll_id === poll.id);
+    return {
+      ...poll,
+      options,
+      votes: pollVotes,
+      vote_counts: options.map((_: string, index: number) => pollVotes.filter((vote) => vote.option_index === index).length),
+      total_votes: pollVotes.length,
+    } as RoomPoll;
+  });
+}
+
+export async function createRoomPoll(roomId: string, createdBy: string, question: string, options: string[]) {
+  const cleanedOptions = options.map((option) => option.trim()).filter(Boolean).slice(0, 6);
+  if (cleanedOptions.length < 2) {
+    throw new Error('Polls require at least two options.');
+  }
+  const data = await writeSupabaseRow<any>(
+    supabase.from('room_polls').insert({
+      room_id: roomId,
+      created_by: createdBy,
+      question: question.trim(),
+      options: cleanedOptions,
+    }).select('*').single(),
+    'Failed to create room poll.'
+  );
+  return {
+    ...data,
+    options: Array.isArray(data.options) ? data.options.map((option: unknown) => String(option)) : cleanedOptions,
+  } as RoomPoll;
+}
+
+export async function voteRoomPoll(roomId: string, pollId: string, userId: string, optionIndex: number) {
+  await writeSupabaseMutation(
+    supabase.from('room_poll_votes').upsert({
+      room_id: roomId,
+      poll_id: pollId,
+      user_id: userId,
+      option_index: optionIndex,
+    }, { onConflict: 'poll_id,user_id' }),
+    'Failed to vote on poll.'
+  );
+}
+
+export async function closeRoomPoll(roomId: string, pollId: string) {
+  await writeSupabaseMutation(
+    supabase.from('room_polls').update({ is_open: false, closed_at: new Date().toISOString() }).eq('room_id', roomId).eq('id', pollId),
+    'Failed to close room poll.'
   );
 }
 

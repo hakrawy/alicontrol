@@ -1,6 +1,9 @@
 -- Realtime watch room foundation.
 -- Apply after the base schema to enable event-driven Watch Together features.
 
+alter table if exists public.watch_rooms
+  add column if not exists is_locked boolean not null default false;
+
 create table if not exists public.room_events (
   id uuid primary key default gen_random_uuid(),
   room_id uuid not null references public.watch_rooms(id) on delete cascade,
