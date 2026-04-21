@@ -13,6 +13,7 @@ import * as api from '../services/api';
 import type { WatchRoom, RoomMessage, StreamSource } from '../services/api';
 import { useAppContext } from '../contexts/AppContext';
 import { useLocale } from '../contexts/LocaleContext';
+import { recordRoomTelemetry } from '../services/watchroomTelemetry';
 import { startWatchRoomRealtime, type WatchRoomRealtimeStatus, type RoomPresenceMember, type RoomPlaybackEvent } from '../services/watchroomRealtime';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -23,11 +24,13 @@ export default function WatchRoomScreen() {
     contentType,
     contentTitle,
     contentPoster,
+    roomCode,
   } = useLocalSearchParams<{
     contentId?: string;
     contentType?: 'movie' | 'episode';
     contentTitle?: string;
     contentPoster?: string;
+    roomCode?: string;
   }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -59,7 +62,14 @@ export default function WatchRoomScreen() {
   const realtimeRef = useRef<ReturnType<typeof startWatchRoomRealtime> | null>(null);
   const realtimeStatusRef = useRef<WatchRoomRealtimeStatus>('idle');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const joinStartedAtRef = useRef<number | null>(null);
+  const joinTelemetryRecordedRef = useRef(false);
+  const messageCooldownRef = useRef(false);
+  const [realtimeReconnectTick, setRealtimeReconnectTick] = useState(0);
+  const autoJoinRoomCodeRef = useRef<string | null>(null);
   const roomId = selectedRoom?.id;
+  const initialRoomCode = typeof roomCode === 'string' ? roomCode : Array.isArray(roomCode) ? roomCode[0] : undefined;
 
   const copy = language === 'Arabic'
     ? {
@@ -305,6 +315,45 @@ export default function WatchRoomScreen() {
     realtimeStatusRef.current = realtimeStatus;
   }, [realtimeStatus]);
 
+  useEffect(() => {
+    if (!joinedRoom || !roomId || !user?.id) return;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (realtimeStatus === 'connected') {
+      if (joinStartedAtRef.current && !joinTelemetryRecordedRef.current) {
+        joinTelemetryRecordedRef.current = true;
+        void recordRoomTelemetry({
+          roomId,
+          userId: user.id,
+          metricType: 'join_latency',
+          value: Date.now() - joinStartedAtRef.current,
+          metadata: { status: realtimeStatus },
+        }).catch(() => undefined);
+      }
+      return;
+    }
+    if (realtimeStatus === 'error' || realtimeStatus === 'disconnected') {
+      void recordRoomTelemetry({
+        roomId,
+        userId: user.id,
+        metricType: 'reconnect',
+        value: 1,
+        metadata: { status: realtimeStatus },
+      }).catch(() => undefined);
+      reconnectTimerRef.current = setTimeout(() => {
+        setRealtimeReconnectTick((current) => current + 1);
+      }, 3000);
+    }
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  }, [joinedRoom, roomId, user?.id, realtimeStatus]);
+
   useEffect(() => { loadRooms(); }, [loadRooms]);
 
   useEffect(() => {
@@ -366,6 +415,18 @@ export default function WatchRoomScreen() {
         }
       },
       onPlaybackEvent: (event) => {
+        if (event.client_ts && roomId && user?.id) {
+          const latency = Date.now() - new Date(event.client_ts).getTime();
+          if (Number.isFinite(latency) && latency >= 0) {
+            void recordRoomTelemetry({
+              roomId,
+              userId: user.id,
+              metricType: 'sync_delay',
+              value: latency,
+              metadata: { eventType: event.event_type },
+            }).catch(() => undefined);
+          }
+        }
         if (event.event_type === 'content_change') {
           applyRoomContentPayload(event.payload);
         }
@@ -383,6 +444,18 @@ export default function WatchRoomScreen() {
         }
       },
       onControlEvent: (event) => {
+        if (event.client_ts && roomId && user?.id) {
+          const latency = Date.now() - new Date(event.client_ts).getTime();
+          if (Number.isFinite(latency) && latency >= 0) {
+            void recordRoomTelemetry({
+              roomId,
+              userId: user.id,
+              metricType: 'sync_delay',
+              value: latency,
+              metadata: { eventType: event.event_type },
+            }).catch(() => undefined);
+          }
+        }
         if (event.event_type === 'content_change') {
           applyRoomContentPayload(event.payload);
         }
@@ -431,12 +504,14 @@ export default function WatchRoomScreen() {
         realtimeRef.current = null;
       }
     };
-  }, [joinedRoom, roomId, user, mergeMessages, applyRoomContentPayload, loadRoomSessionState]);
+  }, [joinedRoom, roomId, user, mergeMessages, applyRoomContentPayload, loadRoomSessionState, realtimeReconnectTick]);
 
-  const handleJoinRoom = async (room: WatchRoom) => {
+  const handleJoinRoom = useCallback(async (room: WatchRoom) => {
     if (!user?.id) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     try {
+      joinStartedAtRef.current = Date.now();
+      joinTelemetryRecordedRef.current = false;
       const activeBan = roomBans.find((ban) => ban.room_id === room.id && ban.user_id === user.id);
       if (activeBan) {
         showAlert(copy.error, 'You are banned from this room.');
@@ -452,7 +527,16 @@ export default function WatchRoomScreen() {
     } catch (err: any) {
       showAlert(copy.error, err.message || copy.joinFailed);
     }
-  };
+  }, [copy.error, copy.joinFailed, isAdmin, roomBans, showAlert, user?.id]);
+
+  useEffect(() => {
+    if (!initialRoomCode || loading || joinedRoom || !user?.id) return;
+    if (autoJoinRoomCodeRef.current === initialRoomCode) return;
+    const match = activeRooms.find((room) => room.room_code === initialRoomCode);
+    if (!match) return;
+    autoJoinRoomCodeRef.current = initialRoomCode;
+    void handleJoinRoom(match);
+  }, [activeRooms, handleJoinRoom, initialRoomCode, joinedRoom, loading, user?.id]);
 
   const handleLeaveRoom = async () => {
     if (!user?.id || !selectedRoom) return;
@@ -475,6 +559,10 @@ export default function WatchRoomScreen() {
     setPollQuestion('');
     setPollOptionsText('');
     setRealtimeStatus('idle');
+    joinStartedAtRef.current = null;
+    joinTelemetryRecordedRef.current = false;
+    messageCooldownRef.current = false;
+    autoJoinRoomCodeRef.current = null;
     loadRooms();
   };
 
@@ -502,6 +590,10 @@ export default function WatchRoomScreen() {
                 setPollQuestion('');
                 setPollOptionsText('');
                 setRealtimeStatus('idle');
+                joinStartedAtRef.current = null;
+                joinTelemetryRecordedRef.current = false;
+                messageCooldownRef.current = false;
+                autoJoinRoomCodeRef.current = null;
                 if (realtimeRef.current) {
                   await realtimeRef.current.cleanup().catch(() => undefined);
                   realtimeRef.current = null;
@@ -519,13 +611,41 @@ export default function WatchRoomScreen() {
 
   const handleSendMessage = async () => {
     if (!chatMessage.trim() || !user?.id || !selectedRoom) return;
+    if (messageCooldownRef.current) {
+      showAlert(copy.error, 'Please wait a moment before sending another message.');
+      return;
+    }
     Haptics.selectionAsync();
+    messageCooldownRef.current = true;
     try {
+      const startedAt = Date.now();
       const msg = await api.sendRoomMessage(selectedRoom.id, user.id, chatMessage.trim());
       mergeMessages(msg);
       setChatMessage('');
       setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 100);
-    } catch {}
+      void recordRoomTelemetry({
+        roomId: selectedRoom.id,
+        userId: user.id,
+        metricType: 'message_latency',
+        value: Date.now() - startedAt,
+        metadata: { source: 'composer' },
+      }).catch(() => undefined);
+    } catch (err: any) {
+      if (String(err?.message || '').toLowerCase().includes('slow')) {
+        void recordRoomTelemetry({
+          roomId: selectedRoom.id,
+          userId: user.id,
+          metricType: 'rate_limited',
+          value: 1,
+          metadata: { source: 'composer' },
+        }).catch(() => undefined);
+      }
+      showAlert(copy.error, err.message || 'Failed to send message.');
+    } finally {
+      setTimeout(() => {
+        messageCooldownRef.current = false;
+      }, 900);
+    }
   };
 
   const handleCreateRoom = async () => {
@@ -846,6 +966,13 @@ export default function WatchRoomScreen() {
       setRoomPolls((current) => [poll, ...current]);
       setPollQuestion('');
       setPollOptionsText('');
+      void recordRoomTelemetry({
+        roomId: selectedRoom.id,
+        userId: user.id,
+        metricType: 'poll_latency',
+        value: 0,
+        metadata: { action: 'create' },
+      }).catch(() => undefined);
       await realtimeRef.current?.sendControlEvent({
         id: `poll_${Date.now()}`,
         room_id: selectedRoom.id,
@@ -873,6 +1000,13 @@ export default function WatchRoomScreen() {
     try {
       await api.voteRoomPoll(selectedRoom.id, pollId, user.id, optionIndex);
       await refreshRoomData();
+      void recordRoomTelemetry({
+        roomId: selectedRoom.id,
+        userId: user.id,
+        metricType: 'poll_latency',
+        value: 0,
+        metadata: { action: 'vote' },
+      }).catch(() => undefined);
       await realtimeRef.current?.sendControlEvent({
         id: `vote_${Date.now()}`,
         room_id: selectedRoom.id,

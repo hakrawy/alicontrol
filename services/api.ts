@@ -449,6 +449,38 @@ export interface RoomPoll {
   total_votes?: number;
 }
 
+export interface RoomTelemetryRow {
+  id: string;
+  room_id: string;
+  user_id?: string | null;
+  metric_type: 'join_latency' | 'message_latency' | 'sync_delay' | 'reconnect' | 'rate_limited' | 'poll_latency' | string;
+  value: number;
+  metadata?: Record<string, any>;
+  created_at: string;
+}
+
+export interface RoomHealthSummary {
+  roomId: string;
+  roomName: string;
+  roomCode: string;
+  hostName: string;
+  isLocked: boolean;
+  isActive: boolean;
+  activeMembers: number;
+  messages24h: number;
+  pollsOpen: number;
+  bansActive: number;
+  reconnects24h: number;
+  rateLimited24h: number;
+  joinLatencyP95: number;
+  messageLatencyP95: number;
+  syncDelayP95: number;
+  lastEventAt?: string | null;
+  lastMessageAt?: string | null;
+  status: 'healthy' | 'degraded' | 'offline';
+  recentMetrics: RoomTelemetryRow[];
+}
+
 export interface RoomEvent {
   id: string;
   room_id: string;
@@ -3114,6 +3146,83 @@ export async function fetchRoomPolls(roomId: string) {
   });
 }
 
+function percentile(values: number[], pct: number) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1));
+  return Math.round(sorted[index] || 0);
+}
+
+export async function fetchWatchRoomHealthOverview() {
+  const rooms = await readSupabaseRows<any>(
+    supabase
+      .from('watch_rooms')
+      .select('*, host:user_profiles!watch_rooms_host_id_fkey(username, avatar, email)')
+      .order('created_at', { ascending: false })
+      .limit(25),
+    [],
+    'Failed to fetch watch rooms for health overview.'
+  );
+  const roomIds = rooms.map((room) => room.id);
+  if (!roomIds.length) {
+    return [] as RoomHealthSummary[];
+  }
+
+  const [members, bans, polls, messages, events, telemetry] = await Promise.all([
+    readSupabaseRows<{ room_id: string }>(supabase.from('watch_room_members').select('room_id').in('room_id', roomIds), [], 'Failed to fetch room members.'),
+    readSupabaseRows<{ room_id: string; user_id: string; is_active: boolean; expires_at?: string | null }>(supabase.from('room_bans').select('room_id, user_id, is_active, expires_at').in('room_id', roomIds).eq('is_active', true), [], 'Failed to fetch room bans.'),
+    readSupabaseRows<{ room_id: string; is_open: boolean }>(supabase.from('room_polls').select('room_id, is_open').in('room_id', roomIds), [], 'Failed to fetch room polls.'),
+    readSupabaseRows<{ room_id: string; created_at: string }>(supabase.from('room_messages').select('room_id, created_at').in('room_id', roomIds).gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()), [], 'Failed to fetch room messages.'),
+    readSupabaseRows<{ room_id: string; created_at: string }>(supabase.from('room_events').select('room_id, created_at').in('room_id', roomIds).order('created_at', { ascending: false }).limit(200), [], 'Failed to fetch room events.'),
+    readSupabaseRows<RoomTelemetryRow>(supabase.from('room_telemetry').select('*').in('room_id', roomIds).order('created_at', { ascending: false }).limit(500), [], 'Failed to fetch room telemetry.'),
+  ]);
+
+  return rooms.map((room: any) => {
+    const roomMembers = members.filter((member) => member.room_id === room.id).length;
+    const roomBans = bans.filter((ban) => ban.room_id === room.id).length;
+    const roomPolls = polls.filter((poll) => poll.room_id === room.id && poll.is_open).length;
+    const roomMessages = messages.filter((message) => message.room_id === room.id).length;
+    const roomEvents = events.filter((event) => event.room_id === room.id);
+    const roomTelemetry = telemetry.filter((metric) => metric.room_id === room.id);
+    const joinLatency = roomTelemetry.filter((metric) => metric.metric_type === 'join_latency').map((metric) => metric.value);
+    const messageLatency = roomTelemetry.filter((metric) => metric.metric_type === 'message_latency').map((metric) => metric.value);
+    const syncDelay = roomTelemetry.filter((metric) => metric.metric_type === 'sync_delay').map((metric) => metric.value);
+    const reconnects = roomTelemetry.filter((metric) => metric.metric_type === 'reconnect').length;
+    const rateLimited = roomTelemetry.filter((metric) => metric.metric_type === 'rate_limited').length;
+    const lastEventAt = roomEvents[0]?.created_at || null;
+    const lastMessageAt = messages.find((message) => message.room_id === room.id)?.created_at || null;
+    const offline = !room.is_active;
+    const degraded = !offline && (
+      reconnects > 0 ||
+      rateLimited > 0 ||
+      percentile(syncDelay, 95) > 1200 ||
+      percentile(messageLatency, 95) > 1500
+    );
+
+    return {
+      roomId: room.id,
+      roomName: room.name,
+      roomCode: room.room_code,
+      hostName: room.host?.username || 'Host',
+      isLocked: Boolean(room.is_locked),
+      isActive: Boolean(room.is_active),
+      activeMembers: roomMembers,
+      messages24h: roomMessages,
+      pollsOpen: roomPolls,
+      bansActive: roomBans,
+      reconnects24h: reconnects,
+      rateLimited24h: rateLimited,
+      joinLatencyP95: percentile(joinLatency, 95),
+      messageLatencyP95: percentile(messageLatency, 95),
+      syncDelayP95: percentile(syncDelay, 95),
+      lastEventAt,
+      lastMessageAt,
+      status: offline ? 'offline' : degraded ? 'degraded' : 'healthy',
+      recentMetrics: roomTelemetry.slice(0, 8),
+    } satisfies RoomHealthSummary;
+  });
+}
+
 export async function createRoomPoll(roomId: string, createdBy: string, question: string, options: string[]) {
   const cleanedOptions = options.map((option) => option.trim()).filter(Boolean).slice(0, 6);
   if (cleanedOptions.length < 2) {
@@ -3154,8 +3263,33 @@ export async function closeRoomPoll(roomId: string, pollId: string) {
 }
 
 export async function sendRoomMessage(roomId: string, userId: string, message: string) {
+  const trimmed = message.trim();
+  if (trimmed.length > 5000) {
+    throw new Error('Message is too long.');
+  }
+  const recentMessages = await readSupabaseRows<{ message: string; created_at: string }>(
+    supabase
+      .from('room_messages')
+      .select('message, created_at')
+      .eq('room_id', roomId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(3),
+    [],
+    'Failed to check room message rate limits.'
+  ).catch(() => []);
+  const lastMessage = recentMessages[0];
+  if (lastMessage) {
+    const lastAt = new Date(lastMessage.created_at).getTime();
+    if (Date.now() - lastAt < 1200) {
+      throw new Error('Please slow down before sending another message.');
+    }
+    if (lastMessage.message.trim() === trimmed) {
+      throw new Error('Duplicate messages are not allowed.');
+    }
+  }
   const data = await writeSupabaseRow<any>(
-    supabase.from('room_messages').insert({ room_id: roomId, user_id: userId, message }).select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)').single(),
+    supabase.from('room_messages').insert({ room_id: roomId, user_id: userId, message: trimmed }).select('*, user:user_profiles!room_messages_user_id_fkey(username, avatar)').single(),
     'Failed to send room message.'
   );
   return data as RoomMessage;
