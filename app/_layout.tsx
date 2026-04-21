@@ -1,11 +1,49 @@
-import React from 'react';
-import { Platform, View } from 'react-native';
-import { Stack } from 'expo-router';
+import React, { useEffect } from 'react';
+import { Platform, View, Text, ActivityIndicator } from 'react-native';
+import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { AlertProvider, AuthProvider } from '@/template';
+import { AlertProvider, AuthProvider, useAuth } from '@/template';
 import { AppProvider } from '../contexts/AppContext';
 import { LocaleProvider, useLocale } from '../contexts/LocaleContext';
+import { theme } from '../constants/theme';
+
+function SimpleLoader() {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.background }}>
+      <ActivityIndicator size="large" color={theme.primary} />
+      <Text style={{ marginTop: 12, color: theme.textSecondary, fontWeight: '700' }}>Loading...</Text>
+    </View>
+  );
+}
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { authLoading, initialized, isAuthenticated } = useAuth();
+
+  const isLoginRoute = pathname === '/login' || pathname?.startsWith('/login/');
+  const authReady = initialized && !authLoading;
+
+  useEffect(() => {
+    if (!authReady) return;
+
+    if (!isAuthenticated && !isLoginRoute) {
+      router.replace('/login');
+      return;
+    }
+
+    if (isAuthenticated && isLoginRoute) {
+      router.replace('/(tabs)');
+    }
+  }, [authReady, isAuthenticated, isLoginRoute, router]);
+
+  if (!authReady) {
+    return <SimpleLoader />;
+  }
+
+  return <>{children}</>;
+}
 
 function AppShell() {
   const { direction } = useLocale();
@@ -74,9 +112,11 @@ export default function RootLayout() {
       <AuthProvider>
         <SafeAreaProvider>
           <LocaleProvider>
-            <AppProvider>
-              <AppShell />
-            </AppProvider>
+            <AuthGate>
+              <AppProvider>
+                <AppShell />
+              </AppProvider>
+            </AuthGate>
           </LocaleProvider>
         </SafeAreaProvider>
       </AuthProvider>
