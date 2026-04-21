@@ -14,6 +14,7 @@ import type { WatchRoom, RoomMessage, StreamSource } from '../services/api';
 import { useAppContext } from '../contexts/AppContext';
 import { useLocale } from '../contexts/LocaleContext';
 import { CinematicBackdrop } from '../components/CinematicUI';
+import { EmptyStateView } from '../components/AppFeedback';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -44,6 +45,7 @@ export default function WatchRoomScreen() {
   const [showCreate, setShowCreate] = useState(false);
   const [roomName, setRoomName] = useState('');
   const chatScrollRef = useRef<ScrollView>(null);
+  const mountedRef = useRef(true);
   const roomId = selectedRoom?.id;
 
   const copy = language === 'Arabic'
@@ -146,9 +148,20 @@ export default function WatchRoomScreen() {
   const loadRooms = useCallback(async () => {
     try {
       const rooms = await api.fetchActiveRooms();
-      setActiveRooms(rooms);
+      if (mountedRef.current) {
+        setActiveRooms(rooms);
+      }
     } catch {}
-    setLoading(false);
+    if (mountedRef.current) {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -157,15 +170,21 @@ export default function WatchRoomScreen() {
 
   useEffect(() => {
     if (!joinedRoom || !roomId) return;
+    let cancelled = false;
     const loadMessages = async () => {
       try {
         const msgs = await api.fetchRoomMessages(roomId);
-        setMessages(msgs);
+        if (!cancelled && mountedRef.current) {
+          setMessages(msgs);
+        }
       } catch {}
     };
     loadMessages();
     const interval = setInterval(loadMessages, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [joinedRoom, roomId]);
 
   const handleJoinRoom = async (room: WatchRoom) => {
@@ -501,10 +520,12 @@ export default function WatchRoomScreen() {
               </Animated.View>
             ))}
             {activeRooms.length === 0 ? (
-              <View style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
-                <MaterialIcons name="groups" size={56} color={theme.textMuted} />
-                <Text style={{ fontSize: 16, fontWeight: '600', color: '#FFF' }}>{copy.noRooms}</Text>
-                <Text style={{ fontSize: 14, color: theme.textSecondary }}>{copy.noRoomsDesc}</Text>
+              <View style={{ paddingTop: 40, paddingHorizontal: 12 }}>
+                <EmptyStateView
+                  icon="groups"
+                  title={copy.noRooms}
+                  description={copy.noRoomsDesc}
+                />
               </View>
             ) : null}
           </ScrollView>

@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AlertProvider, AuthProvider, useAuth } from '@/template';
 import { AppProvider } from '../contexts/AppContext';
 import { LocaleProvider, useLocale } from '../contexts/LocaleContext';
+import { GlobalSystemBanners } from '../components/AppFeedback';
 import { theme } from '../constants/theme';
 
 function SimpleLoader() {
@@ -51,6 +52,7 @@ function AppShell() {
   return (
     <View style={{ flex: 1, direction }}>
       <StatusBar style="light" />
+      <GlobalSystemBanners />
       {Platform.OS === 'web' && (
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700;800&display=swap');
