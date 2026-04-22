@@ -619,7 +619,7 @@ export default function VideoPlayer({
 
   return (
     <View style={[styles.container, isFullscreen && styles.containerFullscreen]}>
-      <StatusBar hidden={isFullscreen} style="light" />
+      <StatusBar hidden={isFullscreen} barStyle="light-content" />
       <Pressable style={styles.touchArea} onPress={showControlsTemporarily}>
         <View style={styles.videoSurface}>
           {renderPosterLayer()}

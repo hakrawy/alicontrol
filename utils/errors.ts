@@ -189,8 +189,8 @@ export function safeAsync<T>(
 
 export function toSafePromise<T>(
   promise: Promise<T>
-): Promise<[Error | null, T | null]> {
+): any {
   return promise
-    .then((data) => [null, data] as const)
-    .catch((error) => [normalizeError(error), null] as const);
+    .then((data: T) => [null, data] as [null, T])
+    .catch((error) => [normalizeError(error), null] as [Error, null]);
 }

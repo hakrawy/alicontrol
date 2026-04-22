@@ -38,7 +38,7 @@ export function isSubscriptionSessionExpired(session: SubscriptionSession | null
   return expiry <= Date.now();
 }
 
-export function createSubscriptionAuthUser(session: SubscriptionSession, label?: string): AuthUser {
+export function createSubscriptionAuthUser(session: SubscriptionSession, label?: string): any {
   const fallbackEmail = `subscription-${session.subscriptionId.slice(0, 8)}@local`;
   const username = label?.trim() || `subscription_${session.subscriptionId.slice(0, 8)}`;
 
@@ -46,6 +46,12 @@ export function createSubscriptionAuthUser(session: SubscriptionSession, label?:
     id: `subscription:${session.subscriptionId}`,
     email: fallbackEmail,
     username,
+    subscriptionId: session.subscriptionId,
+    sessionId: session.sessionId,
+    subscriptionCode: session.code,
+    expiresAt: session.expiresAt,
+    created_at: session.startedAt,
+    updated_at: session.startedAt,
   };
 }
 

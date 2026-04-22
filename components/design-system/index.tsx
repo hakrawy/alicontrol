@@ -158,7 +158,7 @@ export function Spacer({ size = 'md' }: { size?: keyof typeof spacing }) {
 const styles = StyleSheet.create({
   sectionHeader: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   badge: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xxs, borderRadius: radius.sm, alignSelf: 'flex-start' },
-  divider: { height: 1, backgroundColor: theme.divider, marginVertical: spacing.lg },
+  divider: { height: 1, backgroundColor: theme.border, marginVertical: spacing.lg },
 });
 
 export default { spacing, radius, typography, cardStyles, buttonStyles, buttonSizes, layout, responsive, SectionHeader, Card, Badge, Divider, Spacer };

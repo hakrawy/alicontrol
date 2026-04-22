@@ -54,10 +54,15 @@ function formatRemainingMinutes(expiresAt?: string | null) {
 
 export function GlobalSystemBanners() {
   const netInfo = useNetInfo();
+  const auth = useAuth();
 
   const isOffline = netInfo.isConnected === false || netInfo.isInternetReachable === false;
+  const expiryLabel = null;
+  const remainingText = expiryLabel && expiryLabel !== 'Expired' ? expiryLabel : null;
+  const remainingMinutes = remainingText ? Number.parseInt(remainingText, 10) : NaN;
+  const showExpiryWarning = Number.isFinite(remainingMinutes) ? remainingMinutes <= 15 : false;
 
-  if (!isOffline) {
+  if (!isOffline && !showExpiryWarning) {
     return null;
   }
 
@@ -67,6 +72,14 @@ export function GlobalSystemBanners() {
         <View style={[styles.bannerCard, styles.offlineBanner]}>
           <MaterialIcons name="wifi-off" size={18} color="#F8FAFC" />
           <Text style={styles.bannerText}>You are offline. Changes will sync when the connection returns.</Text>
+        </View>
+      ) : null}
+      {showExpiryWarning ? (
+        <View style={[styles.bannerCard, styles.expiryBanner]}>
+          <MaterialIcons name="schedule" size={18} color="#F8FAFC" />
+          <Text style={styles.bannerText}>
+            Subscription session expires soon{remainingText ? ` (${remainingText} left)` : ''}.
+          </Text>
         </View>
       ) : null}
     </View>

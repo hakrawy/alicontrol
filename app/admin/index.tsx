@@ -18,8 +18,6 @@ import { theme } from '../../constants/theme';
 import * as api from '../../services/api';
 import { fetchAdminActivity } from '../../services/adminActivity';
 import { useLocale } from '../../contexts/LocaleContext';
-// NEW: Premium Admin Components
-import { AnalyticsGrid, StatsCard } from '../../components/admin/AdminDashboard';
 
 interface StatCard {
   label: string;
