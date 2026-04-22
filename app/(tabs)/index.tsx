@@ -707,11 +707,11 @@ const styles = StyleSheet.create({
   },
   notificationBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '900' },
   heroContent: { 
-    flex: 1.2, 
+    flex: 1.3, 
     justifyContent: 'flex-end', 
     paddingHorizontal: theme.spacing.xl, 
-    paddingBottom: theme.spacing.xl,
-    paddingTop: 60 
+    paddingBottom: theme.spacing.xxl,
+    paddingTop: 80 
   },
   homeSearchWrap: { 
     paddingHorizontal: theme.spacing.lg, 
