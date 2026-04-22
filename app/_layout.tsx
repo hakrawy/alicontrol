@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AlertProvider, AuthProvider } from '@/template';
 import { AppProvider } from '../contexts/AppContext';
 import { LocaleProvider, useLocale } from '../contexts/LocaleContext';
+import { PlayerSettingsProvider } from '../contexts/PlayerSettingsContext';
 import { PremiumLoader } from '../components/PremiumLoader';
 import ErrorBoundary from '../components/ErrorBoundary';
 
@@ -21,7 +22,6 @@ function AppShell() {
   return (
     <View style={{ flex: 1, direction }}>
       <StatusBar style="light" />
-      {/* Global web max-width centering wrapper */}
       {Platform.OS === 'web' && (
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700;800&display=swap');
@@ -32,7 +32,6 @@ function AppShell() {
           * {
             box-sizing: border-box;
           }
-          /* Prevent horizontal overflow on mobile */
           html, body {
             overflow-x: hidden;
             background-color: #05070D;
@@ -42,11 +41,9 @@ function AppShell() {
               linear-gradient(180deg, #05070D 0%, #060A12 55%, #05070D 100%);
             font-family: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
           }
-          /* Smooth scrolling */
           * {
             scroll-behavior: smooth;
           }
-          /* Better font rendering */
           body {
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
@@ -78,7 +75,6 @@ function AppShell() {
           button:active, [role="button"]:active {
             transform: scale(0.985);
           }
-          /* Input range styles (used in video player) */
           input[type=range]:focus {
             outline: none;
           }
@@ -112,9 +108,11 @@ export default function RootLayout() {
         <AuthProvider>
           <SafeAreaProvider>
             <LocaleProvider>
-              <AppProvider>
-                <AppShell />
-              </AppProvider>
+              <PlayerSettingsProvider>
+                <AppProvider>
+                  <AppShell />
+                </AppProvider>
+              </PlayerSettingsProvider>
             </LocaleProvider>
           </SafeAreaProvider>
         </AuthProvider>

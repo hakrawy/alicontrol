@@ -1,33 +1,48 @@
-import React, { useState, useCallback, memo, useEffect, useRef } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
+  ActivityIndicator,
   Dimensions,
   Platform,
-  ActivityIndicator,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withDelay,
-  Easing,
-  FadeIn,
-  FadeOut,
-} from 'react-native-reanimated';
 import Slider from '@react-native-community/slider';
+import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MaterialIcons } from '@expo/vector-icons';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { usePlayerSettings } from '../../contexts/PlayerSettingsContext';
 import { theme } from '../../constants/theme';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const IS_LANDSCAPE = SCREEN_WIDTH > SCREEN_HEIGHT;
 
-// Player Controls
+type QualityOption = 'auto' | '1080p' | '720p' | '480p' | '360p';
+type PlaybackState = 'idle' | 'loading' | 'playing' | 'paused' | 'buffering' | 'error' | 'ended';
+
+interface StreamSource {
+  id: string;
+  label: string;
+  quality?: string;
+  language?: string;
+  uri?: string;
+}
+
+export interface VideoPlayerProps {
+  source?: string;
+  poster?: string;
+  title?: string;
+  subtitle?: string;
+  availableSources?: StreamSource[];
+  onClose?: () => void;
+  onComplete?: () => void;
+  onError?: (error: Error) => void;
+}
+
 interface PlayerControlsProps {
-  title: string;
+  title?: string;
   subtitle?: string;
   isPlaying: boolean;
   isBuffering: boolean;
@@ -38,6 +53,12 @@ interface PlayerControlsProps {
   isMuted: boolean;
   isFullscreen: boolean;
   playbackRate: number;
+  selectedQuality: QualityOption;
+  availableQualities: QualityOption[];
+  showSkipButtons: boolean;
+  showFullscreenButton: boolean;
+  showQualitySelector: boolean;
+  showPlaybackSpeedControl: boolean;
   availableSpeeds: number[];
   onPlayPause: () => void;
   onSeek: (time: number) => void;
@@ -45,13 +66,29 @@ interface PlayerControlsProps {
   onMuteToggle: () => void;
   onFullscreenToggle: () => void;
   onPlaybackRateChange: (rate: number) => void;
+  onQualityChange: (quality: QualityOption) => void;
   onClose: () => void;
-  onPip?: () => void;
-  onNext?: () => void;
-  onPrevious?: () => void;
+  onSkipBack: () => void;
+  onSkipForward: () => void;
 }
 
-export const PlayerControls = memo(function PlayerControls({
+const availableQualities: QualityOption[] = ['auto', '1080p', '720p', '480p', '360p'];
+const availableSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+const formatTime = (seconds: number): string => {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const mins = Math.floor((safeSeconds % 3600) / 60);
+  const secs = safeSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+const PlayerControls = memo(function PlayerControls({
   title,
   subtitle,
   isPlaying,
@@ -63,6 +100,12 @@ export const PlayerControls = memo(function PlayerControls({
   isMuted,
   isFullscreen,
   playbackRate,
+  selectedQuality,
+  availableQualities,
+  showSkipButtons,
+  showFullscreenButton,
+  showQualitySelector,
+  showPlaybackSpeedControl,
   availableSpeeds,
   onPlayPause,
   onSeek,
@@ -70,200 +113,220 @@ export const PlayerControls = memo(function PlayerControls({
   onMuteToggle,
   onFullscreenToggle,
   onPlaybackRateChange,
+  onQualityChange,
   onClose,
-  onPip,
+  onSkipBack,
+  onSkipForward,
 }: PlayerControlsProps) {
-  const [showControls, setShowControls] = useState(true);
-  const [showSettings, setShowSettings] = useState(false);
   const [showVolume, setShowVolume] = useState(false);
-  const hideTimeout = useRef<NodeJS.Timeout>();
-
-  const formatTime = useCallback((seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    
-    if (hours > 0) {
-      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  }, []);
-
-  const handlePlayPause = useCallback(() => {
-    onPlayPause();
-    resetHideTimer();
-  }, [onPlayPause]);
-
-  const resetHideTimer = useCallback(() => {
-    setShowControls(true);
-    if (hideTimeout.current) {
-      clearTimeout(hideTimeout.current);
-    }
-    if (isPlaying) {
-      hideTimeout.current = setTimeout(() => {
-        setShowControls(false);
-      }, 4000);
-    }
-  }, [isPlaying]);
-
-  const handleSeek = useCallback((value: number) => {
-    onSeek(value * duration);
-  }, [onSeek, duration]);
-
-  useEffect(() => {
-    if (isPlaying) {
-      resetHideTimer();
-    }
-    return () => {
-      if (hideTimeout.current) {
-        clearTimeout(hideTimeout.current);
-      }
-    };
-  }, [isPlaying, resetHideTimer]);
-
-  if (!showControls) {
-    return (
-      <Pressable style={styles.touchArea} onPress={resetHideTimer}>
-        {/* Show buffering indicator */}
-        {isBuffering && (
-          <View style={styles.bufferingOverlay}>
-            <ActivityIndicator size="large" color={theme.primary} />
-          </View>
-        )}
-      </Pressable>
-    );
-  }
+  const [showSpeedOptions, setShowSpeedOptions] = useState(false);
+  const [showQualityOptions, setShowQualityOptions] = useState(false);
 
   return (
     <Animated.View
-      entering={FadeIn.duration(200)}
-      exiting={FadeOut.duration(200)}
+      entering={FadeIn.duration(180)}
+      exiting={FadeOut.duration(180)}
       style={styles.controlsOverlay}
     >
-      {/* Top Bar */}
-      <LinearGradient
-        colors={['rgba(0,0,0,0.8)', 'transparent']}
-        style={styles.topGradient}
-      >
+      <LinearGradient colors={['rgba(0,0,0,0.82)', 'transparent']} style={styles.topGradient}>
         <View style={styles.topBar}>
-          <Pressable style={styles.backButton} onPress={onClose}>
-            <MaterialIcons name="close" size={24} color="#FFF" />
+          <Pressable style={styles.iconButton} onPress={onClose}>
+            <MaterialIcons name="arrow-back" size={24} color="#FFF" />
           </Pressable>
-          
+
           <View style={styles.titleContainer}>
-            <Text style={styles.title} numberOfLines={1}>{title}</Text>
-            {subtitle && (
-              <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
+            {!!title && (
+              <Text style={styles.title} numberOfLines={1}>
+                {title}
+              </Text>
+            )}
+            {!!subtitle && (
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {subtitle}
+              </Text>
             )}
           </View>
 
-          <View style={styles.topActions}>
-            {onPip && (
-              <Pressable style={styles.actionButton} onPress={onPip}>
-                <MaterialIcons name="picture-in-picture-alt" size={22} color="#FFF" />
+          {showQualitySelector ? (
+            <View style={styles.menuWrapper}>
+              <Pressable
+                style={styles.pillButton}
+                onPress={() => {
+                  setShowQualityOptions((v) => !v);
+                  setShowSpeedOptions(false);
+                }}
+              >
+                <MaterialIcons name="hd" size={18} color="#FFF" />
+                <Text style={styles.pillText}>{selectedQuality.toUpperCase()}</Text>
               </Pressable>
-            )}
-          </View>
+
+              {showQualityOptions && (
+                <View style={styles.menuPanel}>
+                  {availableQualities.map((quality) => (
+                    <Pressable
+                      key={quality}
+                      style={[
+                        styles.menuItem,
+                        quality === selectedQuality && styles.menuItemActive,
+                      ]}
+                      onPress={() => {
+                        onQualityChange(quality);
+                        setShowQualityOptions(false);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.menuItemText,
+                          quality === selectedQuality && styles.menuItemTextActive,
+                        ]}
+                      >
+                        {quality.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.iconButtonPlaceholder} />
+          )}
         </View>
       </LinearGradient>
 
-      {/* Center Controls */}
       <View style={styles.centerControls}>
-        {/* Rewind */}
-        <Pressable style={styles.centerButton} onPress={() => onSeek(Math.max(0, currentTime - 10))}>
-          <MaterialIcons name="replay-10" size={40} color="#FFF" />
-        </Pressable>
+        {showSkipButtons && (
+          <Pressable style={styles.centerButton} onPress={onSkipBack}>
+            <MaterialIcons name="replay-10" size={38} color="#FFF" />
+          </Pressable>
+        )}
 
-        {/* Play/Pause */}
-        <Pressable style={styles.playButton} onPress={handlePlayPause}>
+        <Pressable style={styles.playButton} onPress={onPlayPause}>
           {isBuffering ? (
             <ActivityIndicator size="large" color="#FFF" />
           ) : (
             <MaterialIcons
               name={isPlaying ? 'pause' : 'play-arrow'}
-              size={48}
+              size={54}
               color="#FFF"
             />
           )}
         </Pressable>
 
-        {/* Forward */}
-        <Pressable style={styles.centerButton} onPress={() => onSeek(Math.min(duration, currentTime + 10))}>
-          <MaterialIcons name="forward-10" size={40} color="#FFF" />
-        </Pressable>
+        {showSkipButtons && (
+          <Pressable style={styles.centerButton} onPress={onSkipForward}>
+            <MaterialIcons name="forward-10" size={38} color="#FFF" />
+          </Pressable>
+        )}
       </View>
 
-      {/* Bottom Bar */}
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.8)']}
-        style={styles.bottomGradient}
-      >
-        {/* Progress Bar */}
+      <LinearGradient colors={['transparent', 'rgba(0,0,0,0.9)']} style={styles.bottomGradient}>
         <View style={styles.progressContainer}>
           <Slider
             style={styles.progressSlider}
             minimumValue={0}
             maximumValue={1}
             value={progress}
-            onSlidingComplete={handleSeek}
+            onSlidingComplete={(value) => onSeek(value * duration)}
             minimumTrackTintColor={theme.primary}
-            maximumTrackTintColor="rgba(255,255,255,0.3)"
+            maximumTrackTintColor="rgba(255,255,255,0.22)"
             thumbTintColor={theme.primary}
           />
-          <View style={styles.timeContainer}>
+          <View style={styles.timeRow}>
             <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
             <Text style={styles.timeText}>{formatTime(duration)}</Text>
           </View>
         </View>
 
-        {/* Bottom Controls */}
         <View style={styles.bottomControls}>
-          {/* Left Actions */}
           <View style={styles.leftControls}>
-            <Pressable style={styles.volumeButton} onPress={() => setShowVolume(!showVolume)}>
+            <Pressable style={styles.iconButton} onPress={onMuteToggle}>
               <MaterialIcons
-                name={isMuted ? 'volume-off' : volume > 0.5 ? 'volume-up' : 'volume-down'}
+                name={
+                  isMuted
+                    ? 'volume-off'
+                    : volume > 0.5
+                    ? 'volume-up'
+                    : 'volume-down'
+                }
                 size={22}
                 color="#FFF"
               />
             </Pressable>
-            
+
+            <Pressable
+              style={styles.pillButton}
+              onPress={() => setShowVolume((v) => !v)}
+            >
+              <Text style={styles.pillText}>{Math.round((isMuted ? 0 : volume) * 100)}%</Text>
+            </Pressable>
+
             {showVolume && (
-              <View style={styles.volumeSlider}>
+              <View style={styles.volumePanel}>
                 <Slider
-                  style={styles.volumeSliderInner}
+                  style={styles.volumeSlider}
                   minimumValue={0}
                   maximumValue={1}
-                  value={volume}
+                  value={isMuted ? 0 : volume}
                   onValueChange={onVolumeChange}
                   minimumTrackTintColor={theme.primary}
-                  maximumTrackTintColor="rgba(255,255,255,0.3)"
+                  maximumTrackTintColor="rgba(255,255,255,0.22)"
                   thumbTintColor={theme.primary}
                 />
               </View>
             )}
           </View>
 
-          {/* Right Actions */}
           <View style={styles.rightControls}>
-            {/* Playback Speed */}
-            <Pressable 
-              style={styles.speedButton}
-              onPress={() => setShowSettings(!showSettings)}
-            >
-              <Text style={styles.speedText}>{playbackRate}x</Text>
-            </Pressable>
+            {showPlaybackSpeedControl && (
+              <View style={styles.menuWrapper}>
+                <Pressable
+                  style={styles.pillButton}
+                  onPress={() => {
+                    setShowSpeedOptions((v) => !v);
+                    setShowQualityOptions(false);
+                  }}
+                >
+                  <Text style={styles.pillText}>{playbackRate}x</Text>
+                </Pressable>
 
-            {/* Settings Modal would go here */}
-            
-            {/* Fullscreen */}
-            <Pressable style={styles.actionButton} onPress={onFullscreenToggle}>
-              <MaterialIcons
-                name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'}
-                size={24}
-                color="#FFF"
-              />
-            </Pressable>
+                {showSpeedOptions && (
+                  <View style={styles.menuPanel}>
+                    {availableSpeeds.map((speed) => (
+                      <Pressable
+                        key={speed}
+                        style={[
+                          styles.menuItem,
+                          speed === playbackRate && styles.menuItemActive,
+                        ]}
+                        onPress={() => {
+                          onPlaybackRateChange(speed);
+                          setShowSpeedOptions(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.menuItemText,
+                            speed === playbackRate && styles.menuItemTextActive,
+                          ]}
+                        >
+                          {speed}x
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            {showFullscreenButton && (
+              <Pressable style={styles.iconButton} onPress={onFullscreenToggle}>
+                <MaterialIcons
+                  name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'}
+                  size={24}
+                  color="#FFF"
+                />
+              </Pressable>
+            )}
           </View>
         </View>
       </LinearGradient>
@@ -271,14 +334,7 @@ export const PlayerControls = memo(function PlayerControls({
   );
 });
 
-// Loading Overlay
-interface PlayerLoadingProps {
-  message?: string;
-}
-
-export const PlayerLoading = memo(function PlayerLoading({
-  message = 'Loading...',
-}: PlayerLoadingProps) {
+const PlayerLoading = memo(function PlayerLoading({ message = 'Loading...' }: { message?: string }) {
   return (
     <View style={styles.loadingOverlay}>
       <ActivityIndicator size="large" color={theme.primary} />
@@ -287,24 +343,21 @@ export const PlayerLoading = memo(function PlayerLoading({
   );
 });
 
-// Error Display
-interface PlayerErrorProps {
-  title?: string;
-  message?: string;
-  onRetry?: () => void;
-}
-
-export const PlayerError = memo(function PlayerError({
+const PlayerError = memo(function PlayerError({
   title = 'Playback Error',
   message = 'Unable to play this content. Please try again.',
   onRetry,
-}: PlayerErrorProps) {
+}: {
+  title?: string;
+  message?: string;
+  onRetry?: () => void;
+}) {
   return (
     <View style={styles.errorOverlay}>
       <MaterialIcons name="error-outline" size={48} color={theme.error} />
       <Text style={styles.errorTitle}>{title}</Text>
       <Text style={styles.errorMessage}>{message}</Text>
-      {onRetry && (
+      {!!onRetry && (
         <Pressable style={styles.retryButton} onPress={onRetry}>
           <MaterialIcons name="refresh" size={20} color="#FFF" />
           <Text style={styles.retryText}>Try Again</Text>
@@ -314,49 +367,37 @@ export const PlayerError = memo(function PlayerError({
   );
 });
 
-// Source Selector
-interface StreamSource {
-  id: string;
-  label: string;
-  quality?: string;
-  language?: string;
-}
-
-interface SourceSelectorProps {
-  sources: StreamSource[];
-  selectedSource?: string;
-  onSourceSelect: (sourceId: string) => void;
-}
-
-export const SourceSelector = memo(function SourceSelector({
+const SourceSelector = memo(function SourceSelector({
   sources,
-  selectedSource,
+  selectedSourceId,
   onSourceSelect,
-}: SourceSelectorProps) {
+}: {
+  sources: StreamSource[];
+  selectedSourceId?: string;
+  onSourceSelect: (id: string) => void;
+}) {
+  if (!sources.length) return null;
+
   return (
     <View style={styles.sourceSelector}>
-      <Text style={styles.sourceTitle}>Select Source</Text>
+      <Text style={styles.sourceTitle}>Sources</Text>
       {sources.map((source) => (
         <Pressable
           key={source.id}
           style={[
             styles.sourceItem,
-            selectedSource === source.id && styles.sourceItemActive,
+            selectedSourceId === source.id && styles.sourceItemActive,
           ]}
           onPress={() => onSourceSelect(source.id)}
         >
           <View style={styles.sourceInfo}>
             <Text style={styles.sourceLabel}>{source.label}</Text>
             <View style={styles.sourceMeta}>
-              {source.quality && (
-                <Text style={styles.sourceQuality}>{source.quality}</Text>
-              )}
-              {source.language && (
-                <Text style={styles.sourceLanguage}>{source.language}</Text>
-              )}
+              {!!source.quality && <Text style={styles.sourceMetaText}>{source.quality}</Text>}
+              {!!source.language && <Text style={styles.sourceMetaText}>{source.language}</Text>}
             </View>
           </View>
-          {selectedSource === source.id && (
+          {selectedSourceId === source.id && (
             <MaterialIcons name="check" size={20} color={theme.primary} />
           )}
         </Pressable>
@@ -365,106 +406,476 @@ export const SourceSelector = memo(function SourceSelector({
   );
 });
 
+export default function VideoPlayer({
+  source,
+  poster,
+  title,
+  subtitle,
+  availableSources = [],
+  onClose,
+  onComplete,
+  onError,
+}: VideoPlayerProps) {
+  const { settings } = usePlayerSettings();
+
+  const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(settings.defaultVolume ?? 1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(settings.defaultPlaybackSpeed ?? 1);
+  const [selectedQuality, setSelectedQuality] = useState<QualityOption>(
+    (settings.defaultQuality as QualityOption) ?? 'auto'
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(settings.showControls ?? true);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | undefined>(
+    availableSources[0]?.id
+  );
+  const [retryCount, setRetryCount] = useState(0);
+
+  const controlsTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const activeSource = useMemo(() => {
+    const selected = availableSources.find((item) => item.id === selectedSourceId);
+    return selected?.uri ?? source;
+  }, [availableSources, selectedSourceId, source]);
+
+  const clearHideTimer = useCallback(() => {
+    if (controlsTimeout.current) {
+      clearTimeout(controlsTimeout.current);
+      controlsTimeout.current = null;
+    }
+  }, []);
+
+  const showControlsTemporarily = useCallback(() => {
+    setControlsVisible(true);
+    clearHideTimer();
+
+    if (playbackState === 'playing' && settings.showControls !== false) {
+      controlsTimeout.current = setTimeout(() => {
+        setControlsVisible(false);
+      }, 3500);
+    }
+  }, [clearHideTimer, playbackState, settings.showControls]);
+
+  useEffect(() => {
+    setVolume(settings.defaultVolume ?? 1);
+    setPlaybackRate(settings.defaultPlaybackSpeed ?? 1);
+    setSelectedQuality((settings.defaultQuality as QualityOption) ?? 'auto');
+    setControlsVisible(settings.showControls ?? true);
+  }, [
+    settings.defaultPlaybackSpeed,
+    settings.defaultQuality,
+    settings.defaultVolume,
+    settings.showControls,
+  ]);
+
+  useEffect(() => {
+    if (!activeSource) {
+      setPlaybackState('error');
+      setErrorMessage('No video source available.');
+      return;
+    }
+
+    setPlaybackState('loading');
+    setErrorMessage(null);
+
+    const timer = setTimeout(() => {
+      setDuration(3600);
+      setPlaybackState(settings.autoplay ? 'playing' : 'paused');
+      if (settings.showControls !== false) {
+        setControlsVisible(true);
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [activeSource, settings.autoplay, settings.showControls]);
+
+  useEffect(() => {
+    if (playbackState === 'playing') {
+      progressInterval.current = setInterval(() => {
+        setCurrentTime((prev) => {
+          const next = prev + playbackRate;
+          if (duration > 0 && next >= duration) {
+            if (progressInterval.current) clearInterval(progressInterval.current);
+            setPlaybackState('ended');
+            onComplete?.();
+            return duration;
+          }
+          return next;
+        });
+      }, 1000);
+
+      showControlsTemporarily();
+    } else if (progressInterval.current) {
+      clearInterval(progressInterval.current);
+    }
+
+    return () => {
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+        progressInterval.current = null;
+      }
+    };
+  }, [duration, onComplete, playbackRate, playbackState, showControlsTemporarily]);
+
+  useEffect(() => {
+    return () => {
+      clearHideTimer();
+      if (progressInterval.current) clearInterval(progressInterval.current);
+    };
+  }, [clearHideTimer]);
+
+  const handlePlayPause = useCallback(() => {
+    if (playbackState === 'loading' || playbackState === 'buffering') return;
+
+    if (playbackState === 'ended') {
+      setCurrentTime(0);
+      setPlaybackState('playing');
+      return;
+    }
+
+    setPlaybackState((prev) => (prev === 'playing' ? 'paused' : 'playing'));
+  }, [playbackState]);
+
+  const handleSeek = useCallback(
+    (time: number) => {
+      setCurrentTime(Math.max(0, Math.min(time, duration)));
+      showControlsTemporarily();
+    },
+    [duration, showControlsTemporarily]
+  );
+
+  const handleSkipBack = useCallback(() => {
+    handleSeek(currentTime - 10);
+  }, [currentTime, handleSeek]);
+
+  const handleSkipForward = useCallback(() => {
+    handleSeek(currentTime + 10);
+  }, [currentTime, handleSeek]);
+
+  const handleVolumeChange = useCallback((nextVolume: number) => {
+    setVolume(nextVolume);
+    setIsMuted(nextVolume <= 0.01);
+  }, []);
+
+  const handleMuteToggle = useCallback(() => {
+    setIsMuted((prev) => !prev);
+  }, []);
+
+  const handleFullscreenToggle = useCallback(() => {
+    setIsFullscreen((prev) => !prev);
+    showControlsTemporarily();
+  }, [showControlsTemporarily]);
+
+  const handleRetry = useCallback(() => {
+    if (settings.retryOnFailure === false) return;
+
+    const maxRetries = settings.maxRetries ?? 3;
+    if (retryCount >= maxRetries) {
+      setErrorMessage('Maximum retry attempts reached.');
+      return;
+    }
+
+    setRetryCount((prev) => prev + 1);
+    setPlaybackState('loading');
+    setErrorMessage(null);
+
+    setTimeout(() => {
+      if (!activeSource) {
+        const err = new Error('No video source available.');
+        setPlaybackState('error');
+        setErrorMessage(err.message);
+        onError?.(err);
+        return;
+      }
+
+      setPlaybackState(settings.autoplay ? 'playing' : 'paused');
+    }, 1000);
+  }, [activeSource, onError, retryCount, settings.autoplay, settings.maxRetries, settings.retryOnFailure]);
+
+  const handleForceError = useCallback(
+    (message: string) => {
+      const error = new Error(message);
+      setPlaybackState('error');
+      setErrorMessage(message);
+      onError?.(error);
+    },
+    [onError]
+  );
+
+  const progress = duration > 0 ? currentTime / duration : 0;
+
+  const renderPosterLayer = () => {
+    if (poster) {
+      return <Image source={{ uri: poster }} style={styles.poster} contentFit="cover" />;
+    }
+
+    return <View style={styles.videoPlaceholder} />;
+  };
+
+  return (
+    <View style={[styles.container, isFullscreen && styles.containerFullscreen]}>
+      <StatusBar hidden={isFullscreen} style="light" />
+      <Pressable style={styles.touchArea} onPress={showControlsTemporarily}>
+        <View style={styles.videoSurface}>
+          {renderPosterLayer()}
+
+          <LinearGradient
+            colors={['rgba(0,0,0,0.25)', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.35)']}
+            style={styles.visualOverlay}
+          />
+
+          {(playbackState === 'loading' || playbackState === 'buffering') && (
+            <PlayerLoading
+              message={playbackState === 'loading' ? 'Loading stream...' : 'Buffering...'}
+            />
+          )}
+
+          {playbackState === 'error' && (
+            <PlayerError
+              message={errorMessage ?? 'Unable to play this content.'}
+              onRetry={settings.retryOnFailure ? handleRetry : undefined}
+            />
+          )}
+
+          {controlsVisible && playbackState !== 'error' && settings.showControls !== false && (
+            <PlayerControls
+              title={title}
+              subtitle={subtitle}
+              isPlaying={playbackState === 'playing'}
+              isBuffering={playbackState === 'buffering' || playbackState === 'loading'}
+              currentTime={currentTime}
+              duration={duration}
+              progress={progress}
+              volume={volume}
+              isMuted={isMuted}
+              isFullscreen={isFullscreen}
+              playbackRate={playbackRate}
+              selectedQuality={selectedQuality}
+              availableQualities={availableQualities}
+              showSkipButtons={settings.enableSkipButtons !== false}
+              showFullscreenButton={settings.enableFullscreen !== false}
+              showQualitySelector={settings.enableQualitySelector !== false}
+              showPlaybackSpeedControl={settings.enablePlaybackSpeedControl !== false}
+              availableSpeeds={availableSpeeds}
+              onPlayPause={handlePlayPause}
+              onSeek={handleSeek}
+              onVolumeChange={handleVolumeChange}
+              onMuteToggle={handleMuteToggle}
+              onFullscreenToggle={handleFullscreenToggle}
+              onPlaybackRateChange={setPlaybackRate}
+              onQualityChange={setSelectedQuality}
+              onClose={onClose ?? (() => undefined)}
+              onSkipBack={handleSkipBack}
+              onSkipForward={handleSkipForward}
+            />
+          )}
+
+          {settings.enableSourceSwitching !== false && availableSources.length > 1 && (
+            <View style={styles.sourcesDock}>
+              <SourceSelector
+                sources={availableSources}
+                selectedSourceId={selectedSourceId}
+                onSourceSelect={(id) => {
+                  setSelectedSourceId(id);
+                  setCurrentTime(0);
+                  setPlaybackState('loading');
+                }}
+              />
+            </View>
+          )}
+        </View>
+      </Pressable>
+
+      {!activeSource && playbackState !== 'error' && (
+        <View style={styles.missingSourceWrapper}>
+          <PlayerError
+            title="Missing Source"
+            message="No stream source is connected to this player."
+            onRetry={() => handleForceError('No stream source available.')}
+          />
+        </View>
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  touchArea: {
+  container: {
+    width: '100%',
+    height: SCREEN_WIDTH * (9 / 16),
+    minHeight: 220,
+    backgroundColor: '#000',
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 18,
+  },
+  containerFullscreen: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    minHeight: SCREEN_HEIGHT,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 9999,
+    borderRadius: 0,
+  },
+  videoSurface: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  poster: {
     ...StyleSheet.absoluteFillObject,
   },
+  videoPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#11131A',
+  },
+  visualOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  touchArea: {
+    flex: 1,
+  },
 
-  // Controls Overlay
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'space-between',
   },
   topGradient: {
-    paddingTop: Platform.OS === 'ios' ? 50 : 24,
+    paddingTop: Platform.OS === 'ios' ? 52 : 24,
     paddingHorizontal: 16,
     paddingBottom: 40,
   },
+  bottomGradient: {
+    paddingTop: 40,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   titleContainer: {
     flex: 1,
-    marginHorizontal: 16,
+    marginHorizontal: 14,
   },
   title: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: '#FFF',
   },
   subtitle: {
     fontSize: 13,
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.72)',
     marginTop: 2,
   },
-  topActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  actionButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(0,0,0,0.42)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconButtonPlaceholder: {
+    width: 42,
+    height: 42,
+  },
+  pillButton: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  pillText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  menuWrapper: {
+    position: 'relative',
+  },
+  menuPanel: {
+    position: 'absolute',
+    top: 44,
+    right: 0,
+    minWidth: 110,
+    backgroundColor: 'rgba(14,16,24,0.96)',
+    borderRadius: 14,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  menuItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  menuItemActive: {
+    backgroundColor: `${theme.primary}22`,
+  },
+  menuItemText: {
+    color: '#D9E1F2',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  menuItemTextActive: {
+    color: theme.primary,
+  },
 
-  // Center Controls
   centerControls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 48,
+    gap: 34,
   },
   centerButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: 'rgba(0,0,0,0.38)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   playButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    backgroundColor: 'rgba(0,0,0,0.56)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
   },
 
-  // Bottom Bar
-  bottomGradient: {
-    paddingTop: 40,
-    paddingHorizontal: 16,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
-  },
   progressContainer: {
-    marginBottom: 12,
+    marginBottom: 10,
   },
   progressSlider: {
     width: '100%',
-    height: 40,
+    height: 34,
   },
-  timeContainer: {
+  timeRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: -8,
+    marginTop: -2,
   },
   timeText: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
+    color: 'rgba(255,255,255,0.82)',
+    fontWeight: '500',
   },
+
   bottomControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -474,69 +885,56 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  volumeButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  volumeSlider: {
-    width: 100,
-  },
-  volumeSliderInner: {
-    width: 100,
-    height: 40,
+    flex: 1,
   },
   rightControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 10,
   },
-  speedButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: theme.radius.md,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  volumePanel: {
+    width: 116,
+    paddingHorizontal: 2,
   },
-  speedText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFF',
+  volumeSlider: {
+    width: 116,
+    height: 32,
   },
 
-  // Loading
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.9)',
+    backgroundColor: 'rgba(0,0,0,0.62)',
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 20,
   },
   loadingText: {
     fontSize: 14,
-    color: 'rgba(255,255,255,0.7)',
-    marginTop: 16,
+    color: 'rgba(255,255,255,0.78)',
+    marginTop: 14,
+    fontWeight: '500',
   },
 
-  // Error
   errorOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.9)',
+    backgroundColor: 'rgba(0,0,0,0.84)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    zIndex: 30,
   },
   errorTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#FFF',
     marginTop: 16,
   },
   errorMessage: {
     fontSize: 14,
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.74)',
     textAlign: 'center',
     marginTop: 8,
+    maxWidth: 420,
   },
   retryButton: {
     flexDirection: 'row',
@@ -544,44 +942,42 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 20,
     backgroundColor: theme.primary,
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     paddingVertical: 12,
-    borderRadius: theme.radius.lg,
+    borderRadius: theme.radius?.lg ?? 14,
   },
   retryText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#FFF',
   },
 
-  // Buffering
-  bufferingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  sourcesDock: {
+    position: 'absolute',
+    right: 16,
+    bottom: 92,
+    width: 240,
   },
-
-  // Source Selector
   sourceSelector: {
-    backgroundColor: theme.surface,
-    borderRadius: theme.radius.lg,
-    padding: 16,
-    maxHeight: 300,
+    backgroundColor: 'rgba(8,10,15,0.94)',
+    borderRadius: theme.radius?.lg ?? 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   sourceTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: theme.textPrimary,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   sourceItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    borderRadius: theme.radius.md,
-    marginBottom: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
   },
   sourceItemActive: {
     backgroundColor: `${theme.primary}20`,
@@ -590,8 +986,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sourceLabel: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    fontWeight: '600',
     color: theme.textPrimary,
   },
   sourceMeta: {
@@ -599,14 +995,13 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 4,
   },
-  sourceQuality: {
-    fontSize: 12,
+  sourceMetaText: {
+    fontSize: 11,
     color: theme.textSecondary,
   },
-  sourceLanguage: {
-    fontSize: 12,
-    color: theme.textSecondary,
+
+  missingSourceWrapper: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
   },
 });
-
-export default PlayerControls;
