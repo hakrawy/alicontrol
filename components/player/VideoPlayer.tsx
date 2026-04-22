@@ -748,12 +748,12 @@ const styles = StyleSheet.create({
   },
   topGradient: {
     paddingTop: Platform.OS === 'ios' ? 52 : 24,
-    paddingHorizontal: 16,
+    paddingHorizontal: theme.spacing.md,
     paddingBottom: 40,
   },
   bottomGradient: {
     paddingTop: 40,
-    paddingHorizontal: 16,
+    paddingHorizontal: theme.spacing.md,
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
   },
 
@@ -977,7 +977,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 10,
     paddingHorizontal: 10,
-    borderRadius: 12,
+    borderRadius: theme.radius.md,
   },
   sourceItemActive: {
     backgroundColor: `${theme.primary}20`,
