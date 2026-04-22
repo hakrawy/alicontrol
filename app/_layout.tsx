@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AlertProvider, AuthProvider } from '@/template';
 import { AppProvider } from '../contexts/AppContext';
 import { LocaleProvider, useLocale } from '../contexts/LocaleContext';
+import { PlayerSettingsProvider } from '../contexts/PlayerSettingsContext';
 import { PremiumLoader } from '../components/PremiumLoader';
 
 function AppShell() {
@@ -110,9 +111,11 @@ export default function RootLayout() {
       <AuthProvider>
         <SafeAreaProvider>
           <LocaleProvider>
-            <AppProvider>
-              <AppShell />
-            </AppProvider>
+            <PlayerSettingsProvider>
+              <AppProvider>
+                <AppShell />
+              </AppProvider>
+            </PlayerSettingsProvider>
           </LocaleProvider>
         </SafeAreaProvider>
       </AuthProvider>
