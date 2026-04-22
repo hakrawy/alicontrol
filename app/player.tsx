@@ -11,6 +11,7 @@ import { WebView } from 'react-native-webview';
 import HlsLibrary, { Events, ErrorTypes } from 'hls.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../constants/theme';
+import { usePlayerSettings } from '../contexts/PlayerSettingsContext';
 import { useAuth } from '@/template';
 import * as api from '../services/api';
 import { createProxyAdapter } from '../services/playback/proxyAdapter';
@@ -1200,6 +1201,7 @@ function NativeDirectVideoPlayer({
   syncUsername?: string | null;
   syncAvatar?: string | null;
 }) {
+  const { settings } = usePlayerSettings();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -1254,6 +1256,16 @@ function NativeDirectVideoPlayer({
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = false;
     instance.play();
+    // Apply admin player settings
+    if (settings?.defaultVolume !== undefined) {
+      instance.volume = settings.defaultVolume;
+    }
+    if (settings?.autoplay === false) {
+      instance.pause();
+    }
+    if (settings?.defaultPlaybackSpeed && settings.defaultPlaybackSpeed !== 1) {
+      instance.playbackRate = settings.defaultPlaybackSpeed;
+    }
   });
 
   useEffect(() => {
@@ -1908,6 +1920,7 @@ export default function PlayerScreenWrapper() {
 
 function PlayerScreen() {
   const { user } = useAuth();
+  const { settings } = usePlayerSettings();
   const { url, title, sources, subtitleUrl, viewerContentId, viewerContentType, roomId, initialResumeTime } = useLocalSearchParams<{
     url?: string;
     title?: string;
