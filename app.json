@@ -14,7 +14,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/logo.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#05070D"
       },
       "edgeToEdgeEnabled": true
     },
@@ -23,7 +23,8 @@
       "output": "static",
       "name": "Ali Control Web",
       "shortName": "Ali Control",
-      "favicon": "./assets/images/logo.png"
+      "favicon": "./assets/images/logo.png",
+      "backgroundColor": "#05070D"
     },
     "plugins": [
       "expo-router",
@@ -33,7 +34,7 @@
           "image": "./assets/images/logo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#05070D"
         }
       ],
       "expo-web-browser"
