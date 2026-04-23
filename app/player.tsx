@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { View, Text, Pressable, StyleSheet, Linking, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Linking, Platform, ScrollView, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -258,10 +258,12 @@ function SourceSelector({
   sources,
   activeIndex,
   onSelect,
+  vertical = false,
 }: {
   sources: PlayerSource[];
   activeIndex: number;
   onSelect: (index: number) => void;
+  vertical?: boolean;
 }) {
   if (sources.length <= 1) return null;
 
@@ -275,11 +277,16 @@ function SourceSelector({
         </Text>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sourcesRow}>
+      <ScrollView
+        horizontal={!vertical}
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.sourcesRow, vertical && styles.sourcesColumn]}
+      >
         {sources.map((source, index) => (
           <Pressable
             key={`${source.label}-${index}`}
-            style={[styles.sourceChip, activeIndex === index && styles.sourceChipActive]}
+            style={[styles.sourceChip, vertical && styles.sourceChipVertical, activeIndex === index && styles.sourceChipActive]}
             onPress={() => onSelect(index)}
           >
             <Text style={[styles.sourceChipText, activeIndex === index && styles.sourceChipTextActive]}>
@@ -349,6 +356,8 @@ function WebDirectPlayer({
 }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const isWidePlayer = width >= 900;
 
   const [showControls, setShowControls] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -1073,7 +1082,7 @@ function WebDirectPlayer({
             </Pressable>
 
             <Pressable style={styles.playPauseBtn} onPress={togglePlay}>
-              <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={48} color="#FFF" />
+              <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={48} color="#05070D" />
             </Pressable>
 
             <Pressable
@@ -1087,18 +1096,21 @@ function WebDirectPlayer({
 
           <View style={styles.bottomBar}>
             {showSourcesPanel ? (
-              <SourceSelector
-                sources={sources}
-                activeIndex={selectedSourceIndex}
-                onSelect={(index) => {
-                  onSelectSource(index);
-                  void pushRoomEvent('source_change', {
-                    source_index: index,
-                    position_ms: Math.round((videoRef.current?.currentTime || 0) * 1000),
-                  });
-                  setShowSourcesPanel(false);
-                }}
-              />
+              <View style={isWidePlayer ? styles.upNextPanel : undefined}>
+                <SourceSelector
+                  sources={sources}
+                  activeIndex={selectedSourceIndex}
+                  vertical={isWidePlayer}
+                  onSelect={(index) => {
+                    onSelectSource(index);
+                    void pushRoomEvent('source_change', {
+                      source_index: index,
+                      position_ms: Math.round((videoRef.current?.currentTime || 0) * 1000),
+                    });
+                    setShowSourcesPanel(false);
+                  }}
+                />
+              </View>
             ) : null}
 
             {playbackError ? <Text style={styles.errorText}>{playbackError}</Text> : null}
@@ -1141,12 +1153,35 @@ function WebDirectPlayer({
                 </View>
 
                 <View style={styles.timeRow}>
-                  <Text style={styles.timeText}>{formatPlaybackTime(currentTime)}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Text style={styles.timeText}>{formatPlaybackTime(duration)}</Text>
+                  <View style={styles.controlCluster}>
+                    <Pressable style={styles.transportIconBtn} onPress={togglePlay}>
+                      <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={22} color="#FFF" />
+                    </Pressable>
+                    <Pressable style={[styles.transportIconBtn, isLiveStream && styles.disabledControl]} onPress={() => seek(-10)} disabled={isLiveStream}>
+                      <MaterialIcons name="replay-10" size={22} color="#FFF" />
+                    </Pressable>
+                    <Pressable style={[styles.transportIconBtn, isLiveStream && styles.disabledControl]} onPress={() => seek(10)} disabled={isLiveStream}>
+                      <MaterialIcons name="forward-10" size={22} color="#FFF" />
+                    </Pressable>
+                    <Text style={styles.timeText}>{formatPlaybackTime(currentTime)} / {formatPlaybackTime(duration)}</Text>
+                  </View>
+                  <View style={styles.controlCluster}>
+                    {subtitleUrl ? (
+                      <Pressable style={[styles.transportIconBtn, captionsEnabled && styles.transportIconBtnActive]} onPress={toggleCaptions}>
+                        <Text style={styles.speedText}>CC</Text>
+                      </Pressable>
+                    ) : null}
+                    {sources.length > 1 ? (
+                      <Pressable style={[styles.transportIconBtn, showSourcesPanel && styles.transportIconBtnActive]} onPress={() => setShowSourcesPanel((prev) => !prev)}>
+                        <MaterialIcons name="video-library" size={21} color="#FFF" />
+                      </Pressable>
+                    ) : null}
+                    <Pressable style={styles.transportIconBtn} onPress={() => setShowSettingsMenu((prev) => !prev)}>
+                      <MaterialIcons name="settings" size={21} color="#FFF" />
+                    </Pressable>
                     <Pressable
                       onPress={toggleFullscreen}
-                      style={{ marginLeft: 16, padding: 4 }}
+                      style={styles.transportIconBtn}
                       hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
                     >
                       <MaterialIcons
@@ -1211,6 +1246,8 @@ function NativeDirectVideoPlayer({
   const { settings } = usePlayerSettings();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const isWidePlayer = width >= 900;
 
   const [showControls, setShowControls] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -1578,7 +1615,7 @@ function NativeDirectVideoPlayer({
             </Pressable>
 
             <Pressable style={styles.playPauseBtn} onPress={togglePlay}>
-              <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={48} color="#FFF" />
+              <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={48} color="#05070D" />
             </Pressable>
 
             <Pressable style={styles.seekBtn} onPress={() => seek(10)}>
@@ -1588,18 +1625,21 @@ function NativeDirectVideoPlayer({
 
           <View style={styles.bottomBar}>
             {showSourcesPanel ? (
-              <SourceSelector
-                sources={sources}
-                activeIndex={selectedSourceIndex}
-                onSelect={(index) => {
-                  onSelectSource(index);
-                  void pushRoomEvent('source_change', {
-                    source_index: index,
-                    position_ms: Math.round((player.currentTime || 0) * 1000),
-                  });
-                  setShowSourcesPanel(false);
-                }}
-              />
+              <View style={isWidePlayer ? styles.upNextPanel : undefined}>
+                <SourceSelector
+                  sources={sources}
+                  activeIndex={selectedSourceIndex}
+                  vertical={isWidePlayer}
+                  onSelect={(index) => {
+                    onSelectSource(index);
+                    void pushRoomEvent('source_change', {
+                      source_index: index,
+                      position_ms: Math.round((player.currentTime || 0) * 1000),
+                    });
+                    setShowSourcesPanel(false);
+                  }}
+                />
+              </View>
             ) : null}
 
             {subtitleUrl ? (
@@ -1616,12 +1656,35 @@ function NativeDirectVideoPlayer({
             </View>
 
             <View style={styles.timeRow}>
-              <Text style={styles.timeText}>{formatPlaybackTime(currentTime)}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={styles.timeText}>{formatPlaybackTime(duration)}</Text>
+              <View style={styles.controlCluster}>
+                <Pressable style={styles.transportIconBtn} onPress={togglePlay}>
+                  <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={22} color="#FFF" />
+                </Pressable>
+                <Pressable style={styles.transportIconBtn} onPress={() => seek(-10)}>
+                  <MaterialIcons name="replay-10" size={22} color="#FFF" />
+                </Pressable>
+                <Pressable style={styles.transportIconBtn} onPress={() => seek(10)}>
+                  <MaterialIcons name="forward-10" size={22} color="#FFF" />
+                </Pressable>
+                <Text style={styles.timeText}>{formatPlaybackTime(currentTime)} / {formatPlaybackTime(duration)}</Text>
+              </View>
+              <View style={styles.controlCluster}>
+                {subtitleUrl ? (
+                  <View style={[styles.transportIconBtn, styles.transportIconBtnActive]}>
+                    <Text style={styles.speedText}>CC</Text>
+                  </View>
+                ) : null}
+                {sources.length > 1 ? (
+                  <Pressable style={[styles.transportIconBtn, showSourcesPanel && styles.transportIconBtnActive]} onPress={() => setShowSourcesPanel((prev) => !prev)}>
+                    <MaterialIcons name="video-library" size={21} color="#FFF" />
+                  </Pressable>
+                ) : null}
+                <Pressable style={styles.transportIconBtn} onPress={() => setShowSettingsMenu((prev) => !prev)}>
+                  <MaterialIcons name="settings" size={21} color="#FFF" />
+                </Pressable>
                 <Pressable
                   onPress={toggleFullscreen}
-                  style={{ marginLeft: 16, padding: 4 }}
+                  style={styles.transportIconBtn}
                   hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
                 >
                   <MaterialIcons name="fullscreen" size={24} color="#FFF" />
@@ -2465,7 +2528,7 @@ const styles = StyleSheet.create({
 
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.28)',
+    backgroundColor: 'rgba(0,0,0,0.34)',
     justifyContent: 'space-between',
     zIndex: 1000,
     elevation: 12,
@@ -2478,10 +2541,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   centerPlayBtn: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: 'rgba(229,9,20,0.92)',
+    width: 112,
+    height: 112,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.92)',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -2492,7 +2555,7 @@ const styles = StyleSheet.create({
   },
   embeddedOverlay: { backgroundColor: 'transparent' },
 
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.md, gap: theme.spacing.md, zIndex: 1500, elevation: 16 },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, gap: theme.spacing.md, zIndex: 1500, elevation: 16 },
   backButton: {
     width: 48,
     height: 48,
@@ -2525,18 +2588,23 @@ const styles = StyleSheet.create({
   speedText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
 
   sourcesSheet: {
-    backgroundColor: 'rgba(8, 9, 13, 0.96)',
+    backgroundColor: 'rgba(8, 9, 13, 0.88)',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.22)',
     padding: theme.spacing.lg,
     gap: theme.spacing.md,
+    shadowColor: '#000',
+    shadowOpacity: 0.38,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 18 },
   },
   sourcesSheetHeader: { gap: 4 },
   sourcesSheetEyebrow: { fontSize: 11, fontWeight: '900', color: stream.red, letterSpacing: 0 },
   sourcesSheetTitle: { fontSize: 16, fontWeight: '900', color: '#FFF' },
   sourcesSheetSubtitle: { fontSize: 12, color: 'rgba(255,255,255,0.64)' },
   sourcesRow: { gap: 8, paddingRight: 16 },
+  sourcesColumn: { flexDirection: 'column', gap: 10, paddingRight: 0, paddingBottom: 4 },
   sourceChip: {
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 9,
@@ -2544,6 +2612,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+  },
+  sourceChipVertical: {
+    minWidth: 248,
+    minHeight: 64,
+    justifyContent: 'center',
+    borderColor: 'rgba(255,255,255,0.13)',
   },
   sourceChipActive: { backgroundColor: stream.red, borderColor: stream.red },
   sourceChipText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
@@ -2579,17 +2653,17 @@ const styles = StyleSheet.create({
   },
   disabledControl: { opacity: 0.4 },
   playPauseBtn: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    backgroundColor: 'rgba(229,9,20,0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    width: 104,
+    height: 104,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.42)',
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  bottomBar: { paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, gap: 12 },
+  bottomBar: { paddingHorizontal: theme.spacing.xl, paddingBottom: theme.spacing.xl, gap: 12 },
   progressContainer: { marginBottom: 8 },
   progressTrack: {
     height: 5,
@@ -2607,7 +2681,28 @@ const styles = StyleSheet.create({
     backgroundColor: stream.red,
     marginLeft: -7,
   },
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  controlCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  transportIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  transportIconBtnActive: { backgroundColor: stream.red },
   timeText: { fontSize: 13, fontWeight: '500', color: 'rgba(255,255,255,0.7)' },
   errorText: { fontSize: 13, color: '#FCA5A5', textAlign: 'center', marginBottom: 10 },
   helperText: { fontSize: 12, color: 'rgba(255,255,255,0.76)', textAlign: 'center' },
@@ -2625,6 +2720,13 @@ const styles = StyleSheet.create({
   liveDotMini: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.live },
   livePillText: { fontSize: 12, fontWeight: '700', color: '#FFF', letterSpacing: 0.6 },
 
+  upNextPanel: {
+    position: 'absolute',
+    right: theme.spacing.xl,
+    bottom: 116,
+    width: 330,
+    zIndex: 1800,
+  },
   embedBottomSheet: { paddingHorizontal: theme.spacing.md, marginTop: 'auto', marginBottom: 12 },
   embedHintWrap: { paddingHorizontal: theme.spacing.md, paddingBottom: 12 },
   embedHintText: { fontSize: 12, color: 'rgba(255,255,255,0.65)', textAlign: 'center' },
